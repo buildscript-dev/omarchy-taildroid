@@ -8,6 +8,9 @@
 #include <QFile>
 #include <QTimer>
 
+#include <csignal>
+#include <sys/prctl.h>
+
 #include "session.h"
 #include "skin.h"
 
@@ -105,9 +108,13 @@ int main(int argc, char **argv) {
 
   // Audio rides on a second, video-less scrcpy so the mirror stays light.
   QProcess audio;
-  if (!cli.isSet("no-audio") && exportDir.isEmpty())
+  if (!cli.isSet("no-audio") && exportDir.isEmpty()) {
+    // A killed mirror must not leave its audio forwarder behind: an orphan keeps
+    // playing the phone through the laptop speakers with no window to close.
+    audio.setChildProcessModifier([] { prctl(PR_SET_PDEATHSIG, SIGTERM); });
     audio.start("scrcpy", {"--serial", o.serial, "--no-video", "--no-control", "--no-window",
                            "--audio-buffer=40", "--window-title=taildroid-audio"});
+  }
 
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("session", &session);
