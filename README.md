@@ -80,6 +80,23 @@ for `AUDIO_GRACE` (20s) before this machine takes over again.
 Pin it either way from the island: `setAudioMode("pc")`, `setAudioMode("phone")`,
 `setAudioMode("follow")` (the default). Current route is in `pstate.audio`.
 
+## Chats
+
+`phoned` keeps a conversation for every app you can answer from a notification
+(WhatsApp, Signal, Telegram…). Those apps stack their unread messages into one
+notification separated by `<br/>`, so each stack is compared against what is
+already stored and only the new tail is appended; replies sent from the island
+are appended too. The log lives in `~/.local/state/taildroid/chats.json`, keyed
+`"<app>\x00<chat title>"`, 200 messages per chat, and is published as
+`state["chats"]`. `{"cmd":"chat","key":...}` returns one chat's messages.
+
+Apps with no reply handle are not chats — a bill reminder stays a notification.
+
+What the phone sends limits what this can be. KDE Connect relays a chat app's
+text and a reply handle, nothing else: no older history, no pictures, no voice
+notes. SMS and MMS are different, they come through `kdeconnect_sms` in full,
+with attachments.
+
 ## Check
 
 `taildroid-doctor` lists every link and the exact fix for anything missing.

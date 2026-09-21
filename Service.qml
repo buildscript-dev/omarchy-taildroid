@@ -286,7 +286,7 @@ Item {
       "exec scrcpy --serial \"$1\" --video-source=camera --camera-facing=back --camera-size=1920x1080 --no-audio --no-window --no-control --v4l2-sink=/dev/$dev", "sh", serial])
   }
 
-  property var pstate: ({ phone: {}, battery: { level: -1 }, signal: {}, bluetooth: {}, hfp: {}, calls: [], kdeconnect: {}, conversations: [], audio: { route: "", mode: "follow", screenOn: false }, phoneApps: {}, phoneChats: {}, phoneNotifs: [] })
+  property var pstate: ({ phone: {}, battery: { level: -1 }, signal: {}, bluetooth: {}, hfp: {}, calls: [], kdeconnect: {}, conversations: [], audio: { route: "", mode: "follow", screenOn: false }, phoneApps: {}, phoneChats: {}, phoneNotifs: [], chats: [] })
   readonly property var calls: pstate.calls || []
   readonly property var conversations: pstate.conversations || []
   // "pc" while the phone is idle, "phone" while it is in your hand.
@@ -315,7 +315,12 @@ Item {
   function photos() { phonedSend({ cmd: "photos" }) }
   function sendClipboard() { phonedSend({ cmd: "clipboard" }) }
   // Answer a phone notification in place (WhatsApp, Signal, Telegram…).
-  function replyTo(replyId, text) { phonedSend({ cmd: "reply", replyId: String(replyId), text: String(text) }) }
+  function replyTo(replyId, text, key) { phonedSend({ cmd: "reply", replyId: String(replyId), text: String(text), key: String(key || "") }) }
+  // Chats that only exist as notifications (WhatsApp and friends).
+  property var chatMessages: []
+  property string openChatKey: ""
+  readonly property var chats: pstate.chats || []
+  function openChat(key) { openChatKey = String(key || ""); chatMessages = []; phonedSend({ cmd: "chat", key: openChatKey }) }
   function pairKdeconnect() { phonedSend({ cmd: "pairKdeconnect" }) }
   function refreshPhone() { phonedSend({ cmd: "refresh" }) }
   // mode: "follow" (default), "pc" to pin audio here, "phone" to leave it there.
@@ -332,6 +337,7 @@ Item {
         try { msg = JSON.parse(line) } catch (e) { return }
         if (msg.type === "state") root.pstate = msg
         else if (msg.type === "thread") { if (msg.threadId === root.openThreadId) root.threadMessages = msg.messages || [] }
+        else if (msg.type === "chat") { if (msg.key === root.openChatKey) root.chatMessages = msg.messages || [] }
         else if (msg.type === "event") {
           if (msg.kind === "mute") root.micMuted = !!msg.muted
           if (msg.kind === "error") root.lastError = String(msg.message || "")

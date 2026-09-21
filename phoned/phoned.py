@@ -38,6 +38,7 @@ KDEC_ROOT = "/modules/kdeconnect"
 STATE_DIR = os.path.join(os.environ.get("XDG_STATE_HOME", os.path.expanduser("~/.local/state")), "taildroid")
 os.makedirs(STATE_DIR, exist_ok=True)
 MEMORY = os.path.join(STATE_DIR, "phone.json")
+CHATS = os.path.join(STATE_DIR, "chats.json")
 # KDE Connect drops phone app icons and MMS pictures in /tmp, which a reboot wipes.
 SHARE_DIR = os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "taildroid")
 ICON_DIR = os.path.join(SHARE_DIR, "appicons")
@@ -62,6 +63,7 @@ state = {
     "phoneChats": {},
     "contactFaces": {},
     "phoneNotifs": [],
+    "chats": [],
 }
 calls: dict[str, dict] = {}
 threads: dict[int, dict] = {}
@@ -73,6 +75,9 @@ phone_apps: dict[str, str] = {}  # Android app name -> kept copy of its launcher
 attachment_files: dict[str, str] = {}  # attachment uniqueIdentifier -> local file
 phone_notifs: dict[str, dict] = {}  # KDE Connect notification id -> what the phone shows
 chat_icons: dict[str, str] = {}  # "<app>\x00<chat title>" -> kept copy of that chat's picture
+# Apps that only reach this machine as notifications (WhatsApp, Signal, …) still
+# make a conversation once their lines are kept in order instead of replaced.
+chat_log: dict[str, dict] = {}
 memory = {}
 try:
     with open(MEMORY) as f:
@@ -768,6 +773,78 @@ def icon_slug(app):
     return re.sub(r"[^a-z0-9]+", "-", app.lower()).strip("-") or "app"
 
 
+def load_chats():
+    global chat_log
+    try:
+        with open(CHATS) as f:
+            chat_log = json.load(f)
+    except (OSError, ValueError):
+        chat_log = {}
+    publish_chats()
+
+
+def save_chats():
+    try:
+        with open(CHATS, "w") as f:
+            json.dump(chat_log, f)
+    except OSError:
+        pass
+
+
+def publish_chats():
+    out = []
+    for key, c in chat_log.items():
+        last = c["messages"][-1] if c["messages"] else {"text": "", "date": c["date"], "out": False}
+        out.append({"key": key, "app": c["app"], "title": c["title"], "icon": c.get("icon", ""),
+                    "replyId": c.get("replyId", ""), "date": last["date"], "body": last["text"],
+                    "outgoing": last.get("out", False), "count": len(c["messages"])})
+    state["chats"] = sorted(out, key=lambda c: -c["date"])[:120]
+    changed()
+
+
+def log_lines(key, app, title, icon, reply_id, lines):
+    """Keep a notification app's messages as a thread. A stack repeats the lines
+    already seen, so only what is new past the last match is appended."""
+    c = chat_log.setdefault(key, {"app": app, "title": title, "icon": icon, "replyId": reply_id,
+                                  "date": time.time() * 1000, "messages": []})
+    c.update(app=app, title=title, replyId=reply_id)
+    if icon:
+        c["icon"] = icon
+    seen = [m["text"] for m in c["messages"]]
+    fresh = [x for x in lines if x]
+    # Find the longest tail of what is stored that the new stack starts with.
+    start = 0
+    for n in range(min(len(seen), len(fresh)), 0, -1):
+        if seen[-n:] == fresh[:n]:
+            start = n
+            break
+    added = fresh[start:]
+    if not added:
+        return False
+    now = time.time() * 1000
+    for text in added:
+        c["messages"].append({"text": text, "date": now, "out": False})
+    c["messages"] = c["messages"][-200:]
+    c["date"] = now
+    return True
+
+
+def log_sent(key, text):
+    c = chat_log.get(key)
+    if not c:
+        return
+    c["messages"].append({"text": text, "date": time.time() * 1000, "out": True})
+    c["messages"] = c["messages"][-200:]
+    c["date"] = c["messages"][-1]["date"]
+    save_chats()
+    publish_chats()
+
+
+def split_lines(text):
+    parts = re.split(r"<br\s*/?>", text or "", flags=re.I)
+    return [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", x)).strip() for x in parts]
+
+
 def publish_notifs():
     state["phoneNotifs"] = sorted(phone_notifs.values(), key=lambda n: n["id"])
     changed()
@@ -807,6 +884,12 @@ def track_notif(nid, props):
                          "replyId": str(props.get("replyId", "")),
                          "icon": keep_chat_icon(app, title, str(props.get("iconPath", "")))}
     publish_notifs()
+    # Only apps you can answer are conversations. A bill reminder is not a chat.
+    if phone_notifs[nid]["replyId"] and log_lines(
+            chat_key(app, title), app, title, phone_notifs[nid]["icon"],
+            phone_notifs[nid]["replyId"], split_lines(phone_notifs[nid]["text"])):
+        save_chats()
+        publish_chats()
 
 
 def drop_notif(nid):
@@ -942,6 +1025,12 @@ def command(cmd: dict):
     elif c == "reply" and kd:
         kdec(f"/devices/{kd}/notifications", "org.kde.kdeconnect.device.notifications").sendReply(
             str(cmd["replyId"]), str(cmd.get("text", "")))
+        if cmd.get("key"):
+            log_sent(str(cmd["key"]), str(cmd.get("text", "")))
+    elif c == "chat":
+        key = str(cmd.get("key", ""))
+        c2 = chat_log.get(key)
+        emit({"type": "chat", "key": key, "messages": c2["messages"] if c2 else []})
     elif c == "ring" and kd:
         kdec(f"/devices/{kd}/findmyphone", "org.kde.kdeconnect.device.findmyphone").ring()
     elif c == "hotspot":
@@ -1036,6 +1125,7 @@ def main():
 
     load_contacts()
     load_app_icons()
+    load_chats()
     tel_scan()
     bt_scan()
     kdec_scan()
