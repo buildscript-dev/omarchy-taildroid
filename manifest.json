@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.buildscript-dev.taildroid",
+  "name": "Taildroid",
+  "version": "2.0.0",
+  "author": "buildscript (fork of Raymond Thurman's Taildroid)",
+  "license": "MIT",
+  "description": "Continuity for Samsung/Android: skinned high-quality phone mirror, calls, messages, notifications and photos on Omarchy, with Dynamic Island live activities.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Taildroid",
+    "description": "Toggle Taildroid control of a connected Android phone. Pair wireless debugging, connect over Tailscale, and drive the phone with the desktop mouse and keyboard.",
+    "category": "Hardware",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 15,
+      "adbPort": 5555,
+      "preferredPeer": "",
+      "preferredSerial": "",
+      "pairAddress": "",
+      "audioEnabled": true,
+      "clipboardAutosync": true,
+      "stayAwake": true,
+      "turnScreenOff": false,
+      "alwaysOnTop": false,
+      "maxSize": 0
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 120,
+        "step": 5,
+        "defaultValue": 15
+      },
+      {
+        "key": "adbPort",
+        "type": "integer",
+        "label": "Wireless ADB port",
+        "description": "Port used for adb connect over Tailscale. 5555 after a one-time USB `adb tcpip 5555`, or the port shown under Wireless debugging.",
+        "min": 1,
+        "max": 65535,
+        "step": 1,
+        "defaultValue": 5555
+      },
+      {
+        "key": "preferredPeer",
+        "type": "string",
+        "label": "Tailscale hostname",
+        "description": "Optional Tailscale hostname to try first. Empty uses the first online Android peer.",
+        "defaultValue": ""
+      },
+      {
+        "key": "preferredSerial",
+        "type": "string",
+        "label": "Preferred ADB serial",
+        "description": "Optional. If set, Super+Shift+I uses this device when several are attached.",
+        "defaultValue": ""
+      },
+      {
+        "key": "pairAddress",
+        "type": "string",
+        "label": "Wireless pairing address",
+        "description": "Optional default host:port shown in the pairing fields. Pairing codes are entered in the panel and are not stored.",
+        "defaultValue": ""
+      },
+      {
+        "key": "audioEnabled",
+        "type": "boolean",
+        "label": "Forward phone audio",
+        "defaultValue": true
+      },
+      {
+        "key": "clipboardAutosync",
+        "type": "boolean",
+        "label": "Sync clipboard with the phone",
+        "description": "scrcpy copies the desktop clipboard to the phone and the other way around. Turn off if you do not want passwords to cross the session.",
+        "defaultValue": true
+      },
+      {
+        "key": "stayAwake",
+        "type": "boolean",
+        "label": "Keep phone awake while controlling",
+        "defaultValue": true
+      },
+      {
+        "key": "turnScreenOff",
+        "type": "boolean",
+        "label": "Turn phone screen off while mirroring",
+        "defaultValue": false
+      },
+      {
+        "key": "alwaysOnTop",
+        "type": "boolean",
+        "label": "Keep scrcpy window always on top",
+        "defaultValue": false
+      },
+      {
+        "key": "maxSize",
+        "type": "integer",
+        "label": "Max mirror size (0 = native)",
+        "min": 0,
+        "max": 4096,
+        "step": 64,
+        "defaultValue": 0
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+TEMPLATE = app
+TARGET = taildroid-mirror
+QT += quick multimedia
+CONFIG += c++20 release link_pkgconfig
+PKGCONFIG += libavcodec libavutil libswscale
+QMAKE_CXXFLAGS_RELEASE += -O2
+SOURCES += main.cpp session.cpp
+HEADERS += session.h skin.h
+RESOURCES += mirror.qrc
