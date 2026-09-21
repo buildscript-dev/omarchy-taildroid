@@ -674,7 +674,7 @@ def on_kdec_signal(*args, **kw):
 # profile on = this laptop, profile off = the phone keeps its own audio.
 AUDIO_GRACE = 20  # seconds the phone must stay dark before the laptop takes over
 
-audio = {"mode": "follow", "screenOn": True, "route": "phone", "since": 0.0,
+audio = {"mode": "follow", "screenOn": True, "playing": False, "route": "phone", "since": 0.0,
          "profile": "", "dialUntil": 0.0}
 answered_here = set()
 _audio_lock = threading.Lock()
@@ -713,11 +713,46 @@ def wanted_route():
     for c in calls.values():
         if c["state"] == "active":
             return "phone" if c.get("onPhone") else "pc"
-    if audio["screenOn"]:
+    if audio["screenOn"] or audio["playing"]:
         return "phone"
     if time.time() - audio["since"] < AUDIO_GRACE:
         return audio["route"]  # a glance at the phone must not yank the audio back
     return "pc"
+
+
+A2DP_SOURCE = "0000110a-0000-1000-8000-00805f9b34fb"  # the phone as an audio source
+
+
+def set_a2dp(on):
+    """Take the route at BlueZ, not only at PipeWire.
+
+    Android keeps sending media to a connected A2DP sink even when this end's card
+    profile is "off", so the sound lands nowhere and the phone stays silent. Drop
+    the A2DP link instead and Android falls back to the phone speaker; the device
+    stays connected, so calls, AVRCP and KDE Connect are untouched.
+    """
+    bt = state["bluetooth"]
+    if not bt.get("path") or not bt.get("connected"):
+        return
+    try:
+        dev = dbus.Interface(system.get_object("org.bluez", bt["path"]), "org.bluez.Device1")
+        call = dev.ConnectProfile if on else dev.DisconnectProfile
+        call(A2DP_SOURCE, reply_handler=lambda: None, error_handler=lambda e: None)
+    except dbus.DBusException:
+        pass
+
+
+def media_playing():
+    """Is the phone itself playing media? AVRCP answers even while the card is off."""
+    try:
+        om = dbus.Interface(system.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
+        for path, ifaces in om.GetManagedObjects().items():
+            player = ifaces.get("org.bluez.MediaPlayer1")
+            if player and str(path).startswith(state["bluetooth"].get("path", "\0")):
+                return str(player.get("Status", "")).lower() == "playing"
+    except dbus.DBusException:
+        pass
+    return False
 
 
 def apply_audio():
@@ -734,8 +769,10 @@ def apply_audio():
                 run("pactl", "set-card-profile", card, profile)
             elif want == "phone" and active not in ("", "off"):
                 run("pactl", "set-card-profile", card, "off")
+        GLib.idle_add(lambda: (set_a2dp(want == "pc"), False)[1])
         audio["route"] = want
-        state["audio"] = {"route": want, "mode": audio["mode"], "screenOn": audio["screenOn"]}
+        state["audio"] = {"route": want, "mode": audio["mode"], "screenOn": audio["screenOn"],
+                          "playing": audio["playing"]}
 
 
 def audio_now():
@@ -751,8 +788,16 @@ def audio_work():
         if m and (m.group(1) == "true") != audio["screenOn"]:
             audio["screenOn"] = m.group(1) == "true"
             audio["since"] = time.time()
+    audio["playing"] = media_playing()
     apply_audio()
     GLib.idle_add(lambda: (changed(), False)[1])
+
+
+def on_player_props(iface, changed_props, invalidated):
+    """Phone started or stopped playing — move the audio now, do not wait for the poll."""
+    if "Status" in changed_props:
+        audio["playing"] = str(changed_props["Status"]).lower() == "playing"
+        audio_now()
 
 
 def audio_tick():
@@ -1141,6 +1186,8 @@ def main():
                                 if name in (TEL, KDEC) else None, "NameOwnerChanged", "org.freedesktop.DBus")
     system.add_signal_receiver(lambda *a, **k: GLib.timeout_add(200, lambda: (bt_scan(), False)[1]), "PropertiesChanged",
                                "org.freedesktop.DBus.Properties", "org.bluez", arg0="org.bluez.Device1")
+    system.add_signal_receiver(on_player_props, "PropertiesChanged", "org.freedesktop.DBus.Properties",
+                               "org.bluez", arg0="org.bluez.MediaPlayer1")
 
     load_contacts()
     load_app_icons()

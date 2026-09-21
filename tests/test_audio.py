@@ -26,13 +26,17 @@ Card #48
 class Route(unittest.TestCase):
     def setUp(self):
         phoned.calls.clear()
-        phoned.audio.update(mode="follow", screenOn=False, route="pc", since=0.0, dialUntil=0.0)
+        phoned.audio.update(mode="follow", screenOn=False, playing=False, route="pc", since=0.0, dialUntil=0.0)
 
     def test_dark_phone_gives_the_laptop_the_audio(self):
         self.assertEqual(phoned.wanted_route(), "pc")
 
     def test_phone_in_hand_keeps_its_own_audio(self):
         phoned.audio["screenOn"] = True
+        self.assertEqual(phoned.wanted_route(), "phone")
+
+    def test_media_on_a_dark_phone_stays_on_the_phone(self):
+        phoned.audio.update(playing=True, since=0.0)
         self.assertEqual(phoned.wanted_route(), "phone")
 
     def test_a_glance_does_not_yank_the_audio_back(self):
