@@ -32,7 +32,9 @@ class Hypr : public QObject {
   Q_OBJECT
 public:
   Q_INVOKABLE void resize(int w, int h) {
-    QProcess::startDetached("hyprctl", {"dispatch", QString("hl.dsp.window.resize({ x = %1, y = %2, window = \"pid:%3\" })")
+    // Without `exact` this is a relative resize, which left the window at
+    // whatever size Hyprland first gave it and the phone floating inside it.
+    QProcess::startDetached("hyprctl", {"dispatch", QString("hl.dsp.window.resize({ x = %1, y = %2, exact = true, window = \"pid:%3\" })")
                                                         .arg(w).arg(h).arg(QCoreApplication::applicationPid())});
   }
 };
