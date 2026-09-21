@@ -675,7 +675,7 @@ def on_kdec_signal(*args, **kw):
 AUDIO_GRACE = 20  # seconds the phone must stay dark before the laptop takes over
 
 audio = {"mode": "follow", "screenOn": True, "playing": False, "route": "phone", "since": 0.0,
-         "profile": "", "dialUntil": 0.0}
+         "profile": "", "dialUntil": 0.0, "btAt": 0.0}
 answered_here = set()
 _audio_lock = threading.Lock()
 
@@ -720,16 +720,24 @@ def wanted_route():
     return "pc"
 
 
-A2DP_SOURCE = "0000110a-0000-1000-8000-00805f9b34fb"  # the phone as an audio source
+# The phone as an audio source (media) and as a hands-free gateway (calls + mic).
+AUDIO_UUIDS = ("0000110a-0000-1000-8000-00805f9b34fb", "0000111f-0000-1000-8000-00805f9b34fb")
 
 
-def set_a2dp(on):
+def set_bt_audio(on):
     """Take the route at BlueZ, not only at PipeWire.
 
-    Android keeps sending media to a connected A2DP sink even when this end's card
-    profile is "off", so the sound lands nowhere and the phone stays silent. Drop
-    the A2DP link instead and Android falls back to the phone speaker; the device
-    stays connected, so calls, AVRCP and KDE Connect are untouched.
+    The PipeWire card profile is no lever at all: with it "off" Android still
+    sends media to this machine's A2DP sink, where it lands nowhere and the phone
+    plays silently, and still lists this machine as its active headset, so a call
+    or a voice note on the phone records THIS microphone instead of its own.
+    Dropping the profiles at BlueZ is what Android listens to — media goes back to
+    the phone speaker and the mic back to the phone. The device stays connected,
+    so AVRCP, contacts and KDE Connect are untouched.
+
+    The cost of dropping hands-free: org.pipewire.Telephony loses its AudioGateway
+    with it, so the island cannot answer or dial while the audio lives on the
+    phone. That is the trade the "follow" rule already makes for sound.
     """
     bt = state["bluetooth"]
     if not bt.get("path") or not bt.get("connected"):
@@ -737,7 +745,8 @@ def set_a2dp(on):
     try:
         dev = dbus.Interface(system.get_object("org.bluez", bt["path"]), "org.bluez.Device1")
         call = dev.ConnectProfile if on else dev.DisconnectProfile
-        call(A2DP_SOURCE, reply_handler=lambda: None, error_handler=lambda e: None)
+        for uuid in AUDIO_UUIDS:
+            call(uuid, reply_handler=lambda: None, error_handler=lambda e: None)
     except dbus.DBusException:
         pass
 
@@ -769,7 +778,13 @@ def apply_audio():
                 run("pactl", "set-card-profile", card, profile)
             elif want == "phone" and active not in ("", "off"):
                 run("pactl", "set-card-profile", card, "off")
-        GLib.idle_add(lambda: (set_a2dp(want == "pc"), False)[1])
+        # Only when the link disagrees with the route, and at most once every 15s:
+        # BlueZ answers a repeated ConnectProfile with br-connection-busy and can
+        # wedge there until the device is bounced. The card is a fair proxy for
+        # "some audio profile is up", since both are switched together.
+        if (want == "pc") != bool(card) and time.time() - audio["btAt"] > 15:
+            audio["btAt"] = time.time()
+            GLib.idle_add(lambda: (set_bt_audio(want == "pc"), False)[1])
         audio["route"] = want
         state["audio"] = {"route": want, "mode": audio["mode"], "screenOn": audio["screenOn"],
                           "playing": audio["playing"]}
