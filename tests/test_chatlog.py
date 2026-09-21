@@ -59,10 +59,51 @@ class ChatLog(unittest.TestCase):
         self.assertTrue(phoned.chat_log[KEY]["messages"][-1]["out"])
 
 
+class OpenChat(unittest.TestCase):
+    """An open conversation has to update itself, not wait to be reopened."""
+
+    def setUp(self):
+        phoned.chat_log.clear()
+        phoned.open_chat["key"] = KEY
+        self.frames = []
+        self.real_emit, phoned.emit = phoned.emit, self.frames.append
+        self.real_save, phoned.save_chats = phoned.save_chats, lambda: None
+        self.real_pub, phoned.publish_chats = phoned.publish_chats, lambda: None
+
+    def tearDown(self):
+        phoned.emit = self.real_emit
+        phoned.save_chats = self.real_save
+        phoned.publish_chats = self.real_pub
+        phoned.open_chat["key"] = ""
+
+    def chats(self):
+        return [f for f in self.frames if f.get("type") == "chat"]
+
+    def test_a_sent_reply_reaches_the_open_chat(self):
+        log("Hi")
+        phoned.log_sent(KEY, "hello back")
+        sent = self.chats()[-1]["messages"][-1]
+        self.assertEqual(sent["text"], "hello back")
+        self.assertTrue(sent["out"])
+
+    def test_another_chat_being_open_is_left_alone(self):
+        phoned.open_chat["key"] = "WhatsApp\x00Someone else"
+        log("Hi")
+        phoned.log_sent(KEY, "hello back")
+        self.assertEqual(self.chats()[-1]["messages"], [])
+
+
 class Split(unittest.TestCase):
     def test_br_separates_messages_and_tags_go(self):
         self.assertEqual(phoned.split_lines("<b>~ Manoj</b><br/>photo<br />next"),
                          ["~ Manoj", "photo", "next"])
+
+    def test_entities_are_read_back_as_characters(self):
+        self.assertEqual(phoned.split_lines("Demo &amp; Mentor &lt;tag&gt; &quot;q&quot;"),
+                         ['Demo & Mentor <tag> "q"'])
+
+    def test_an_escaped_entity_is_not_decoded_twice(self):
+        self.assertEqual(phoned.split_lines("&amp;lt;"), ["&lt;"])
 
 
 if __name__ == "__main__":

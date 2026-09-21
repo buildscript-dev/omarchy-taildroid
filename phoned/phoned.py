@@ -69,6 +69,7 @@ calls: dict[str, dict] = {}
 threads: dict[int, dict] = {}
 messages: dict[int, dict] = {}  # threadId -> {uid: message}
 open_thread = {"id": 0}
+open_chat = {"key": ""}
 contacts: dict[str, str] = {}
 contact_faces: dict[str, str] = {}  # last 9 digits -> that contact's photo
 phone_apps: dict[str, str] = {}  # Android app name -> kept copy of its launcher icon
@@ -838,11 +839,29 @@ def log_sent(key, text):
     c["date"] = c["messages"][-1]["date"]
     save_chats()
     publish_chats()
+    emit_chat()
+
+
+ENTITIES = [("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'"), ("&apos;", "'"), ("&nbsp;", " "), ("&amp;", "&")]
 
 
 def split_lines(text):
-    parts = re.split(r"<br\s*/?>", text or "", flags=re.I)
-    return [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", x)).strip() for x in parts]
+    """One notification, one message per <br/>, with the markup taken back out."""
+    out = []
+    for part in re.split(r"<br\s*/?>", text or "", flags=re.I):
+        part = re.sub(r"<[^>]+>", "", part)
+        for entity, char in ENTITIES:  # &amp; last, or "&amp;lt;" would double-decode
+            part = part.replace(entity, char)
+        out.append(re.sub(r"\s+", " ", part).strip())
+    return out
+
+
+def emit_chat():
+    key = open_chat["key"]
+    if key:
+        c = chat_log.get(key)
+        emit({"type": "chat", "key": key, "messages": c["messages"] if c else []})
+    return False
 
 
 def publish_notifs():
@@ -890,6 +909,7 @@ def track_notif(nid, props):
             phone_notifs[nid]["replyId"], split_lines(phone_notifs[nid]["text"])):
         save_chats()
         publish_chats()
+        emit_chat()
 
 
 def drop_notif(nid):
@@ -1028,9 +1048,8 @@ def command(cmd: dict):
         if cmd.get("key"):
             log_sent(str(cmd["key"]), str(cmd.get("text", "")))
     elif c == "chat":
-        key = str(cmd.get("key", ""))
-        c2 = chat_log.get(key)
-        emit({"type": "chat", "key": key, "messages": c2["messages"] if c2 else []})
+        open_chat["key"] = str(cmd.get("key", ""))
+        emit_chat()
     elif c == "ring" and kd:
         kdec(f"/devices/{kd}/findmyphone", "org.kde.kdeconnect.device.findmyphone").ring()
     elif c == "hotspot":
