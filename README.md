@@ -122,8 +122,9 @@ Tools: `screen` (numbered element list, optional screenshot with the numbers dra
   to Wi-Fi adb so you can unplug.
 - The Dynamic Island shows a purple robot live activity while the assistant
   reads or drives the phone (`omarchy-shell island aiActivity`).
-- Typing is ASCII only (`adb input text`); emoji and other scripts must be
-  typed on the phone.
+- ASCII is typed with `adb input text`; emoji and other scripts go through a
+  short control-only scrcpy session that sets the phone clipboard and pastes
+  (it replaces what was on the phone's clipboard).
 
 Tests: `python3 -m unittest tests/test_mcp.py`.
 

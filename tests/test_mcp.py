@@ -78,9 +78,19 @@ class InputTests(unittest.TestCase):
     def test_input_text_escapes_spaces_and_percent(self):
         self.assertEqual(mcp.input_text_arg("I'm 5% late"), "I'm%s5\\%%slate")
 
-    def test_non_ascii_is_refused_not_mangled(self):
-        with self.assertRaises(mcp.PhoneError):
-            mcp.type_text("नमस्ते")
+    def test_non_ascii_goes_through_clipboard_paste(self):
+        with patch.object(mcp, "paste_text") as paste, patch.object(mcp, "shell") as shell:
+            mcp.type_text("नमस्ते 👋")
+        paste.assert_called_once_with("नमस्ते 👋")
+        shell.assert_not_called()
+
+    def test_set_clipboard_message_layout(self):
+        msg = mcp.set_clipboard_msg("hé")
+        self.assertEqual(msg[0], 9)                      # SET_CLIPBOARD
+        self.assertEqual(msg[1:9], bytes(8))             # sequence 0: no ack
+        self.assertEqual(msg[9], 1)                      # paste
+        self.assertEqual(int.from_bytes(msg[10:14], "big"), 3)
+        self.assertEqual(msg[14:], "hé".encode())
 
     def test_shell_quotes_every_argument(self):
         with patch.object(mcp, "pick_serial", return_value="S1"), patch.object(mcp, "run", return_value=b"") as run:

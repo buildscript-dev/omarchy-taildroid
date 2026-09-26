@@ -250,12 +250,64 @@ def input_text_arg(text: str) -> str:
     return text.replace("%", "\\%").replace(" ", "%s")
 
 
+SERVER_JAR = "/usr/share/scrcpy/scrcpy-server"
+PHONE_JAR = "/data/local/tmp/taildroid-mcp-server.jar"
+
+
+def set_clipboard_msg(text: str, paste: bool = True) -> bytes:
+    """scrcpy control message SET_CLIPBOARD (type 9): sequence 0 asks for no
+    ack, then paste flag, big-endian length, UTF-8 text."""
+    data = text.encode()
+    return bytes([9]) + (0).to_bytes(8, "big") + bytes([1 if paste else 0]) + len(data).to_bytes(4, "big") + data
+
+
+def paste_text(text: str) -> None:
+    """Type any script or emoji: start a control-only scrcpy server (the same
+    one the mirror uses), set the phone clipboard and paste. adb `input text`
+    only does ASCII. Replaces what was on the phone's clipboard."""
+    import random
+    import socket
+    serial = pick_serial()
+    version = run(["scrcpy", "--version"]).split()[1:2]
+    if not version or not pathlib.Path(SERVER_JAR).exists():
+        raise PhoneError("scrcpy is needed to type non-ASCII text.")
+    run(["adb", "-s", serial, "push", SERVER_JAR, PHONE_JAR], timeout=30)
+    scid = f"{random.getrandbits(31):08x}"
+    port = run(["adb", "-s", serial, "forward", "tcp:0", f"localabstract:scrcpy_{scid}"]).strip()
+    if not port.isdigit():
+        raise PhoneError("adb forward failed.")
+    server = subprocess.Popen(["adb", "-s", serial, "shell", f"CLASSPATH={PHONE_JAR}", "app_process", "/",
+                               "com.genymobile.scrcpy.Server", version[0], f"scid={scid}", "log_level=warn",
+                               "video=false", "audio=false", "control=true", "tunnel_forward=true",
+                               "send_device_meta=false", "cleanup=false"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 8
+        while True:
+            try:
+                sock = socket.create_connection(("127.0.0.1", int(port)), timeout=2)
+                if sock.recv(1):  # dummy byte: the server is really listening
+                    break
+                sock.close()
+            except OSError:
+                pass
+            if time.monotonic() > deadline:
+                raise PhoneError("The phone did not start the scrcpy server.")
+            time.sleep(0.1)
+        with sock:
+            sock.sendall(set_clipboard_msg(text))
+            time.sleep(0.4)
+    finally:
+        server.terminate()
+        run(["adb", "-s", serial, "forward", "--remove", f"tcp:{port}"])
+
+
 def type_text(text: str) -> None:
     if not text:
         return
     if any(ord(c) > 126 or ord(c) < 32 for c in text):
-        # ponytail: `input text` is ASCII-only; emoji/Hindi need an IME or the mirror's clipboard paste.
-        raise PhoneError("Only plain ASCII text can be typed over adb. Type other scripts or emoji on the phone.")
+        paste_text(text)
+        return
     for chunk in [text[i:i + 200] for i in range(0, len(text), 200)]:
         shell("input", "text", input_text_arg(chunk))
 
