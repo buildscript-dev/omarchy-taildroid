@@ -93,6 +93,31 @@ class InputTests(unittest.TestCase):
                 tool({"number": "123; reboot"})
 
 
+class NewToolTests(unittest.TestCase):
+    def test_labels_only_actionable_elements_scaled(self):
+        els = mcp.parse_ui(UI)[1]
+        f = mcp.label_filter(els, 0.5)
+        self.assertTrue(f.startswith("scale=iw*0.5000:-2"))
+        self.assertIn("text=2:", f)          # Send button
+        self.assertIn("x=490-tw/2", f)       # 980 * 0.5
+        self.assertNotIn("text=1:", f)       # "Chats" is only a label
+
+    def test_wait_for_finds_text_or_times_out(self):
+        els = mcp.parse_ui(UI)[1]
+        def fake_read():
+            mcp.last_elements = els
+            return "screen"
+        with patch.object(mcp, "read_screen", side_effect=fake_read):
+            self.assertEqual(mcp.tool_wait_for({"text": "send"})[0], 'Found "send"')
+            self.assertIn("did not appear", mcp.tool_wait_for({"text": "nope", "timeout": 0})[0])
+        with self.assertRaises(mcp.PhoneError):
+            mcp.tool_wait_for({"text": " "})
+
+    def test_open_app_refuses_while_locked(self):
+        with patch.object(mcp, "is_locked", return_value=True), self.assertRaises(mcp.PhoneError):
+            mcp.tool_open_app({"app": "whatsapp"})
+
+
 class NotificationTests(unittest.TestCase):
     def test_parse_notifications(self):
         self.assertEqual(mcp.parse_notifications(NOTIFS), [

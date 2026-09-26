@@ -107,7 +107,7 @@ opened). Register it once:
 claude mcp add --scope user taildroid -- python3 ~/.config/omarchy/plugins/io.github.buildscript-dev.taildroid/mcp/taildroid_mcp.py
 ```
 
-Tools: `screen` (numbered element list, optional screenshot), `tap`,
+Tools: `screen` (numbered element list, optional screenshot with the numbers drawn on), `wait_for`, `tap`,
 `long_press`, `swipe`, `scroll`, `type`, `key`, `open_app`, `list_apps`,
 `notifications`, `sms`, `call`, `device`, `connection`.
 

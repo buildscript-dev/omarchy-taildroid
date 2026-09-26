@@ -167,10 +167,18 @@ def dump_ui() -> str:
     return xml
 
 
+def is_locked() -> bool:
+    return "isKeyguardShowing=true" in shell("dumpsys", "window")
+
+
 def read_screen() -> str:
     global last_elements
     pkg, last_elements = parse_ui(dump_ui())
-    return format_screen(pkg, last_elements)
+    text = format_screen(pkg, last_elements)
+    if is_locked():
+        text = ("PHONE IS LOCKED: apps open behind the lock screen and can't be read. "
+                "Ask the user to unlock it; never try to guess or enter a PIN.\n") + text
+    return text
 
 
 def wait_idle(settle_s: float = 0.5) -> str:
@@ -183,12 +191,31 @@ def wait_idle(settle_s: float = 0.5) -> str:
     return read_screen()
 
 
-def screenshot(width: int = 540) -> str:
+FONT = "/usr/share/fonts/liberation/LiberationSans-Bold.ttf"
+
+
+def label_filter(els: list[dict], scale: float) -> str:
+    """ffmpeg filters drawing each actionable element's number on the image,
+    so the model can match what it sees to `tap element=N`."""
+    parts = [f"scale=iw*{scale:.4f}:-2"]
+    for e in els[:80]:
+        if not set(e["flags"]) & {"click", "long", "edit", "scroll"}:
+            continue
+        x, y = int(e["x"] * scale), int(e["y"] * scale)
+        parts.append(f"drawbox=x={x - 11}:y={y - 9}:w=22:h=18:color=0xFF2D55@0.85:t=fill")
+        parts.append(f"drawtext=fontfile={FONT}:text={e['i']}:fontsize=13:fontcolor=white:"
+                     f"x={x}-tw/2:y={y}-th/2")
+    return ",".join(parts)
+
+
+def screenshot(width: int = 540, labels: bool = False) -> str:
     png = exec_out("screencap", "-p", timeout=15)
     if not png.startswith(b"\x89PNG"):
         raise PhoneError("Screenshot failed (secure screens like banking apps come back black or empty).")
     try:  # smaller JPEG: cheaper for the model to look at
-        p = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-vf", f"scale={width}:-2",
+        vf = label_filter(last_elements, width / screen_size()[0]) if labels and pathlib.Path(FONT).exists() \
+            else f"scale={width}:-2"
+        p = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-vf", vf,
                             "-q:v", "5", "-f", "mjpeg", "pipe:1"], input=png, capture_output=True, timeout=15)
         if p.returncode == 0 and p.stdout:
             return base64.b64encode(p.stdout).decode()
@@ -283,7 +310,7 @@ def tool_screen(a):
     island("Reading the screen")
     text = read_screen()
     if a.get("screenshot"):
-        return [text, ("image", screenshot())]
+        return [text, ("image", screenshot(labels=a.get("labels", True)))]
     return [text]
 
 
@@ -350,8 +377,26 @@ def tool_key(a):
 
 
 def tool_open_app(a):
+    if is_locked():
+        raise PhoneError("The phone is locked, so the app would open behind the lock screen. "
+                         "Ask the user to unlock it first.")
     pkg = open_app(str(a.get("app", "")))
     return after(a, f"Opened {pkg}")
+
+
+def tool_wait_for(a):
+    """Wait until text shows up on screen (a chat loads, a page finishes)."""
+    want = str(a.get("text", "")).strip().lower()
+    if not want:
+        raise PhoneError("Give the text to wait for.")
+    deadline = time.monotonic() + min(float(a.get("timeout", 10)), 30)
+    while True:
+        text = read_screen()
+        if any(want in (e["text"] + " " + e["desc"]).lower() for e in last_elements):
+            return [f'Found "{a["text"]}"', text]
+        if time.monotonic() >= deadline:
+            return [f'"{a["text"]}" did not appear', text]
+        time.sleep(0.3)
 
 
 def tool_list_apps(a):
@@ -426,8 +471,12 @@ def tool_connection(a):
 
 TOOLS = {
     "screen": (tool_screen, "Read the phone's current screen: app and a numbered list of elements "
-               "(text, position, flags). Set screenshot=true to also get an image.",
-               {"screenshot": {"type": "boolean"}}),
+               "(text, position, flags). Set screenshot=true to also get an image with the element "
+               "numbers drawn on it (labels=false for a clean one).",
+               {"screenshot": {"type": "boolean"}, "labels": {"type": "boolean"}}),
+    "wait_for": (tool_wait_for, "Wait until some text appears on the screen (up to timeout seconds, "
+                 "default 10, max 30), then return the screen.",
+                 {"text": {"type": "string"}, "timeout": {"type": "number"}}),
     "tap": (tool_tap, "Tap an element by its number from the last screen, or at x,y.",
             {"element": {"type": "integer"}, "x": {"type": "integer"}, "y": {"type": "integer"},
              "observe": {"type": "boolean", "description": "Return the new screen (default true)"}}),
