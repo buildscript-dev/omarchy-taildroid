@@ -62,6 +62,18 @@ class ScreenTests(unittest.TestCase):
             mcp.target({})
 
 
+class SerialTests(unittest.TestCase):
+    def test_usb_first_then_wifi_and_override(self):
+        with patch.object(mcp, "devices", return_value=["192.168.1.8:5555", "RZ1"]):
+            self.assertEqual(mcp.pick_serial(), "RZ1")
+            with patch.dict(mcp.os.environ, {"TAILDROID_SERIAL": "192.168.1.8:5555"}):
+                self.assertEqual(mcp.pick_serial(), "192.168.1.8:5555")
+            with patch.dict(mcp.os.environ, {"TAILDROID_SERIAL": "gone"}), self.assertRaises(mcp.PhoneError):
+                mcp.pick_serial()
+        with patch.object(mcp, "devices", return_value=["192.168.1.8:5555"]):
+            self.assertEqual(mcp.pick_serial(), "192.168.1.8:5555")
+
+
 class InputTests(unittest.TestCase):
     def test_input_text_escapes_spaces_and_percent(self):
         self.assertEqual(mcp.input_text_arg("I'm 5% late"), "I'm%s5\\%%slate")

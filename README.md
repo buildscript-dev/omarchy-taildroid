@@ -117,7 +117,7 @@ Tools: `screen` (numbered element list, optional screenshot), `tap`,
 - `sms` and `call` only open the composer or dialer. Sending or calling is a
   separate tap, which Claude Code asks you to approve.
 - Screen and notification text is marked as untrusted data for the model.
-- USB is used first; with no cable it reconnects to the phone's last Wi-Fi
+- USB is used first (set `TAILDROID_SERIAL` to pick a phone or force Wi-Fi); with no cable it reconnects to the phone's last Wi-Fi
   address. `connection` with `action: wireless` switches a plugged-in phone
   to Wi-Fi adb so you can unplug.
 - The Dynamic Island shows a purple robot live activity while the assistant

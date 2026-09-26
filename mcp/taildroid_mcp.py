@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import pathlib
 import re
 import shlex
@@ -62,6 +63,11 @@ def devices() -> list[str]:
 
 def pick_serial() -> str:
     devs = devices()
+    want = os.environ.get("TAILDROID_SERIAL", "")
+    if want:  # one phone among several, or force Wi-Fi over a plugged-in cable
+        if want in devs:
+            return want
+        raise PhoneError(f"TAILDROID_SERIAL={want} is not on adb (have: {', '.join(devs) or 'none'}).")
     usb = [d for d in devs if ":" not in d and not d.startswith("adb-")]
     if usb or devs:
         return (usb or devs)[0]
