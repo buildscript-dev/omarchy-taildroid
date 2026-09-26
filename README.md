@@ -11,6 +11,7 @@ The Dynamic Island loads `Service.qml`; the bar widget is optional.
 | `mirror/` → `~/.local/bin/taildroid-mirror` | Qt6 client for the scrcpy server (pinned to the system scrcpy). Galaxy frame or official Samsung emulator skin, H.265 up to 120 fps, VA-API decode on the AMD iGPU, UHID keyboard, touch, clipboard, audio via a video-less scrcpy. |
 | `phoned/phoned.py` | One daemon: adb presence + Wi-Fi reconnect, BlueZ phone link, PipeWire HFP telephony (`org.pipewire.Telephony`), KDE Connect (SMS threads, battery, signal, contacts, photos, find phone). JSON lines over stdin/stdout. |
 | `Service.qml` | Runs phoned, launches mirrors (phone, DeX, single app, webcam), exposes `calls`, `conversations`, `answer()`, `dial()`, `sendSms()`… |
+| `mcp/taildroid_mcp.py` | MCP server so an AI assistant (Claude Code…) can see and drive the phone over USB or Wi-Fi adb. See [AI control](#ai-control). |
 | Island | Incoming-call pill (answer/decline), call live activity, Control Center pages: Phone, Call/Keypad, Messages, Thread. |
 
 ## Keys
@@ -96,6 +97,35 @@ What the phone sends limits what this can be. KDE Connect relays a chat app's
 text and a reply handle, nothing else: no older history, no pictures, no voice
 notes. SMS and MMS are different, they come through `kdeconnect_sms` in full,
 with attachments.
+
+## AI control
+
+`mcp/taildroid_mcp.py` is a stdio MCP server (Python stdlib only, no port
+opened). Register it once:
+
+```sh
+claude mcp add --scope user taildroid -- python3 ~/.config/omarchy/plugins/io.github.buildscript-dev.taildroid/mcp/taildroid_mcp.py
+```
+
+Tools: `screen` (numbered element list, optional screenshot), `tap`,
+`long_press`, `swipe`, `scroll`, `type`, `key`, `open_app`, `list_apps`,
+`notifications`, `sms`, `call`, `device`, `connection`.
+
+- Acts by element number from the last `screen`, or by x,y. Every action
+  returns the new screen, so a step is one call (about 3 s on USB; the
+  uiautomator dump is most of it).
+- `sms` and `call` only open the composer or dialer. Sending or calling is a
+  separate tap, which Claude Code asks you to approve.
+- Screen and notification text is marked as untrusted data for the model.
+- USB is used first; with no cable it reconnects to the phone's last Wi-Fi
+  address. `connection` with `action: wireless` switches a plugged-in phone
+  to Wi-Fi adb so you can unplug.
+- The Dynamic Island shows a purple robot live activity while the assistant
+  reads or drives the phone (`omarchy-shell island aiActivity`).
+- Typing is ASCII only (`adb input text`); emoji and other scripts must be
+  typed on the phone.
+
+Tests: `python3 -m unittest tests/test_mcp.py`.
 
 ## Check
 
