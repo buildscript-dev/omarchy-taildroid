@@ -409,8 +409,11 @@ def tool_connection(a):
         ip = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", shell("ip", "-f", "inet", "addr", "show", "wlan0"))
         if not ip:
             raise PhoneError("The phone is not on Wi-Fi.")
-        run(["adb", "-s", serial, "tcpip", "5555"])
-        time.sleep(1.5)
+        # tcpip restarts adbd, which drops a running mirror; skip it when the
+        # phone already listens (phoned turns it on at every USB plug-in).
+        if shell("getprop", "service.adb.tcp.port").strip() != "5555":
+            run(["adb", "-s", serial, "tcpip", "5555"])
+            time.sleep(1.5)
         out = run(["adb", "connect", f"{ip.group(1)}:5555"])
         return [f"{out.strip()}. You can unplug the cable now."]
     if action == "connect":
