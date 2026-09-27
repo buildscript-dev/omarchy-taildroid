@@ -785,32 +785,43 @@ def call_here():
     return False
 
 
-headset = {"card": "", "profile": ""}  # a Bluetooth headset moved to its mic profile for a call
+def headphones_first():
+    """Bluetooth headphones on this laptop become the default output and mic.
+
+    WirePlumber keeps the last output picked by hand, and buds come back as a
+    new device after every music/call mode change, so without this the sound
+    falls back to the laptop speaker. Runs on each new sink; a sink picked by
+    hand while the buds stay connected is kept until they reconnect."""
+    phone = state["bluetooth"].get("address", "").replace(":", "_")
+    proc = subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE, text=True)
+    for line in proc.stdout:
+        if "'new' on sink #" not in line:
+            continue
+        idx = line.rsplit("#", 1)[1].strip()
+        name = next((l.split("\t")[1] for l in run("pactl", "list", "short", "sinks").splitlines()
+                     if l.split("\t")[0] == idx), "")
+        if not name.startswith("bluez_output.") or (phone and phone in name):
+            continue
+        run("pactl", "set-default-sink", name)
+        mic = "bluez_input." + name[len("bluez_output."):].split(".")[0].replace("_", ":")
+        if mic in run("pactl", "list", "short", "sources"):
+            run("pactl", "set-default-source", mic)
 
 
-def headset_for_call(on):
-    """Buds in music mode (A2DP) have no microphone: the call would hear them,
-    but they would send silence. For a call taken here, switch the headset that
-    is playing to its hands-free profile, and give music mode back afterwards."""
-    if on and not headset["card"]:
-        m = re.match(r"bluez_output\.([0-9A-F]{2}(?:_[0-9A-F]{2}){5})", run("pactl", "get-default-sink").strip())
-        if not m:
-            return
-        card = "bluez_card." + m.group(1)
-        active, _ = card_profiles(card)
-        if active.startswith("a2dp"):
-            headset.update(card=card, profile=active)
-            for p in ("headset-head-unit", "headset-head-unit-cvsd"):
-                if run("pactl", "set-card-profile", card, p) == "" and card_profiles(card)[0] == p:
-                    break
-    elif not on and headset["card"]:
-        run("pactl", "set-card-profile", headset["card"], headset["profile"])
-        headset.update(card="", profile="")
+def buds_on_laptop():
+    """Bluetooth buds are this laptop's output. Then a call must NOT come here:
+    their mic needs a second voice (SCO) link next to the phone's, and this
+    MediaTek adapter cannot carry two ("urb submission failed (90)", both links
+    die). The phone sends the call straight to the buds instead (they connect to
+    both), one link on the phone's radio; the island still answers and hangs up."""
+    return run("pactl", "get-default-sink").startswith("bluez_output.")
 
 
 def activate_sco():
     """Pull the call audio over now: the island answered, the phone did not open SCO.
     Answering here means talking here, so a muted laptop mic is switched on."""
+    if buds_on_laptop():
+        return
     if "MUTED" in run("wpctl", "get-volume", "@DEFAULT_AUDIO_SOURCE@"):
         run("wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "0")
         event("mute", muted=False)
@@ -878,8 +889,7 @@ def apply_audio():
         if (want == "pc") != bool(card) and time.time() - audio["btAt"] > 15:
             audio["btAt"] = time.time()
             GLib.idle_add(lambda: (set_bt_audio(want == "pc"), False)[1])
-        here = call_here()
-        headset_for_call(here)
+        here = call_here() and not buds_on_laptop()
         GLib.idle_add(lambda: (set_reject_sco(not here), False)[1])
         audio["route"] = want
         state["audio"] = {"route": want, "mode": audio["mode"], "screenOn": audio["screenOn"],
@@ -1337,6 +1347,7 @@ def main():
     bt_scan()
     kdec_scan()
     start_track()
+    threading.Thread(target=headphones_first, daemon=True).start()
     audio_tick()
     GLib.timeout_add_seconds(3, audio_tick)
     GLib.timeout_add_seconds(20, bt_scan)
