@@ -179,6 +179,7 @@ Panel {
   Service {
     id: phone
     settings: root.settings
+    runPhoned: false  // the island's Service owns phoned
   }
 
   Connections {

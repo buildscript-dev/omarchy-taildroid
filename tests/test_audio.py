@@ -35,6 +35,30 @@ class Route(unittest.TestCase):
         phoned.audio["screenOn"] = True
         self.assertEqual(phoned.wanted_route(), "phone")
 
+    def test_lost_adb_keeps_the_audio_on_the_phone(self):
+        saved = (phoned.state["phone"].get("serial"), phoned.media_playing, phoned.apply_audio, phoned.GLib.idle_add)
+        phoned.state["phone"]["serial"] = ""
+        phoned.media_playing = lambda: False
+        phoned.apply_audio = lambda: None
+        phoned.GLib.idle_add = lambda *a: None
+        try:
+            phoned.audio_work()
+        finally:
+            phoned.state["phone"]["serial"], phoned.media_playing, phoned.apply_audio, phoned.GLib.idle_add = saved
+        self.assertEqual(phoned.wanted_route(), "phone")
+
+    def test_call_audio_comes_here_only_for_island_calls(self):
+        self.assertFalse(phoned.call_here())  # nothing: refuse
+        phoned.calls["/c"] = {"state": "incoming"}
+        self.assertFalse(phoned.call_here())  # ringing: the phone keeps it
+        phoned.calls["/c"] = {"state": "active", "onPhone": True}
+        self.assertFalse(phoned.call_here())  # answered on the handset
+        phoned.calls["/c"] = {"state": "active", "onPhone": False}
+        self.assertTrue(phoned.call_here())   # answered from the island
+        phoned.calls["/c"] = {"state": "dialing"}
+        phoned.audio["dialUntil"] = time.time() + 10
+        self.assertTrue(phoned.call_here())   # dialed from the island
+
     def test_media_on_a_dark_phone_stays_on_the_phone(self):
         phoned.audio.update(playing=True, since=0.0)
         self.assertEqual(phoned.wanted_route(), "phone")

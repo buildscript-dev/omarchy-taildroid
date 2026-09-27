@@ -112,8 +112,10 @@ int main(int argc, char **argv) {
     // A killed mirror must not leave its audio forwarder behind: an orphan keeps
     // playing the phone through the laptop speakers with no window to close.
     audio.setChildProcessModifier([] { prctl(PR_SET_PDEATHSIG, SIGTERM); });
+    // --audio-dup: without it scrcpy mutes the phone speaker and the laptop
+    // plays everything, so YouTube in your hand comes out of the laptop.
     audio.start("scrcpy", {"--serial", o.serial, "--no-video", "--no-control", "--no-window",
-                           "--audio-buffer=40", "--window-title=taildroid-audio"});
+                           "--audio-dup", "--audio-buffer=120", "--window-title=taildroid-audio"});
   }
 
   QQmlApplicationEngine engine;

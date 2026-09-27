@@ -8,6 +8,9 @@ Item {
   id: root
 
   property var settings: ({})
+  // Only one Service may run phoned: two daemons fight over the Bluetooth audio
+  // route and bounce A2DP every few seconds. The bar widget sets this false.
+  property bool runPhoned: true
 
   property bool adbInstalled: false
   property bool scrcpyInstalled: false
@@ -329,7 +332,7 @@ Item {
   Process {
     id: phoned
     command: ["python3", root.pluginDir + "/phoned/phoned.py"]
-    running: true
+    running: root.runPhoned
     stdinEnabled: true
     stdout: SplitParser {
       onRead: function(line) {
@@ -345,9 +348,9 @@ Item {
         }
       }
     }
-    onExited: phonedRestart.restart()
+    onExited: function(code) { if (code !== 75) phonedRestart.restart() }  // 75: a newer phoned took over
   }
-  Timer { id: phonedRestart; interval: 3000; onTriggered: phoned.running = true }
+  Timer { id: phonedRestart; interval: 3000; onTriggered: phoned.running = root.runPhoned }
 
   Timer {
     id: refreshTimer

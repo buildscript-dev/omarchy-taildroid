@@ -19,6 +19,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -456,6 +457,11 @@ def on_tel_props(iface, changed_props, invalidated, path=None):
         if calls[path]["state"] != was:
             audio_now()
         changed()
+    elif iface == f"{TEL}.AudioGatewayTransport1" and "RejectSCO" in changed_props:
+        # PipeWire refuses one SCO attempt, then clears RejectSCO, and the phone
+        # simply tries again. Re-arm at once so every retry is refused too.
+        if not bool(changed_props["RejectSCO"]) and not call_here():
+            set_reject_sco(True)
 
 
 def tel_call(path, method, *args, iface="Call1"):
@@ -584,6 +590,10 @@ def on_conversation(msg):
     changed()
 
 
+# What the phone shares with this PC through KDE Connect, each one a toggle in the island.
+SHARE_PLUGINS = ("notifications", "sms", "clipboard", "contacts", "telephony", "share", "mpriscontrol", "findmyphone")
+
+
 def kdec_scan():
     k = state["kdeconnect"]
     try:
@@ -617,6 +627,11 @@ def kdec_scan():
         k["name"] = kdec_prop(base, "org.kde.kdeconnect.device", "name", "")
         k["reachable"] = kdec_prop(base, "org.kde.kdeconnect.device", "isReachable", False)
         k["paired"] = kdec_prop(base, "org.kde.kdeconnect.device", "isPaired", False)
+        try:
+            d = kdec(base, "org.kde.kdeconnect.device")
+            k["sharing"] = {p: bool(d.isPluginEnabled("kdeconnect_" + p)) for p in SHARE_PLUGINS}
+        except dbus.DBusException:
+            pass
         lvl = kdec_prop(base + "/battery", "org.kde.kdeconnect.device.battery", "charge", -1)
         if lvl is not None and lvl >= 0:
             state["battery"] = {"level": lvl, "charging": kdec_prop(base + "/battery", "org.kde.kdeconnect.device.battery", "isCharging", False)}
@@ -721,7 +736,8 @@ def wanted_route():
 
 
 # The phone as an audio source (media) and as a hands-free gateway (calls + mic).
-AUDIO_UUIDS = ("0000110a-0000-1000-8000-00805f9b34fb", "0000111f-0000-1000-8000-00805f9b34fb")
+A2DP_UUID = "0000110a-0000-1000-8000-00805f9b34fb"
+HFP_UUID = "0000111f-0000-1000-8000-00805f9b34fb"
 
 
 def set_bt_audio(on):
@@ -735,18 +751,95 @@ def set_bt_audio(on):
     the phone speaker and the mic back to the phone. The device stays connected,
     so AVRCP, contacts and KDE Connect are untouched.
 
-    The cost of dropping hands-free: org.pipewire.Telephony loses its AudioGateway
-    with it, so the island cannot answer or dial while the audio lives on the
-    phone. That is the trade the "follow" rule already makes for sound.
+    Only A2DP is dropped. Hands-free is NOT: Android reconnects it by itself a
+    few seconds later, so disconnecting it flapped every 15s and made the laptop
+    the phone's headset again each time. It stays up instead (the island keeps
+    answer and dial) and set_reject_sco() keeps the call and mic audio off it.
     """
     bt = state["bluetooth"]
     if not bt.get("path") or not bt.get("connected"):
         return
     try:
         dev = dbus.Interface(system.get_object("org.bluez", bt["path"]), "org.bluez.Device1")
-        call = dev.ConnectProfile if on else dev.DisconnectProfile
-        for uuid in AUDIO_UUIDS:
-            call(uuid, reply_handler=lambda: None, error_handler=lambda e: None)
+        noop = dict(reply_handler=lambda: None, error_handler=lambda e: None)
+        (dev.ConnectProfile if on else dev.DisconnectProfile)(A2DP_UUID, **noop)
+        if not state["hfp"].get("ready"):
+            dev.ConnectProfile(HFP_UUID, **noop)
+    except dbus.DBusException:
+        pass
+
+
+def call_here():
+    """Is a call taken on this laptop (answered or dialed from the island)?
+
+    Only then may the phone's call audio come here. Everything else, a ringing
+    call, one answered on the handset, a WhatsApp call Bluetooth never sees, a
+    phone held to the ear with its screen off, keeps its audio on the phone:
+    once the phone opens an SCO link, refusing new ones does not close it.
+    """
+    for c in calls.values():
+        if c["state"] in ("active", "held") and not c.get("onPhone"):
+            return True
+        if c["state"] in ("dialing", "alerting") and time.time() < audio["dialUntil"]:
+            return True
+    return False
+
+
+headset = {"card": "", "profile": ""}  # a Bluetooth headset moved to its mic profile for a call
+
+
+def headset_for_call(on):
+    """Buds in music mode (A2DP) have no microphone: the call would hear them,
+    but they would send silence. For a call taken here, switch the headset that
+    is playing to its hands-free profile, and give music mode back afterwards."""
+    if on and not headset["card"]:
+        m = re.match(r"bluez_output\.([0-9A-F]{2}(?:_[0-9A-F]{2}){5})", run("pactl", "get-default-sink").strip())
+        if not m:
+            return
+        card = "bluez_card." + m.group(1)
+        active, _ = card_profiles(card)
+        if active.startswith("a2dp"):
+            headset.update(card=card, profile=active)
+            for p in ("headset-head-unit", "headset-head-unit-cvsd"):
+                if run("pactl", "set-card-profile", card, p) == "" and card_profiles(card)[0] == p:
+                    break
+    elif not on and headset["card"]:
+        run("pactl", "set-card-profile", headset["card"], headset["profile"])
+        headset.update(card="", profile="")
+
+
+def activate_sco():
+    """Pull the call audio over now: the island answered, the phone did not open SCO.
+    Answering here means talking here, so a muted laptop mic is switched on."""
+    if "MUTED" in run("wpctl", "get-volume", "@DEFAULT_AUDIO_SOURCE@"):
+        run("wpctl", "set-mute", "@DEFAULT_AUDIO_SOURCE@", "0")
+        event("mute", muted=False)
+    path = state["hfp"].get("path")
+    if not path:
+        return
+    try:
+        props = dbus.Interface(session.get_object(TEL, path), "org.freedesktop.DBus.Properties")
+        props.Set(f"{TEL}.AudioGatewayTransport1", "RejectSCO", dbus.Boolean(False))
+        dbus.Interface(session.get_object(TEL, path), f"{TEL}.AudioGatewayTransport1").Activate(
+            reply_handler=lambda: None, error_handler=lambda e: None)
+    except dbus.DBusException:
+        pass
+
+
+def set_reject_sco(reject):
+    """Refuse the phone's SCO (call/mic audio) link while the audio lives on the phone.
+
+    Hands-free stays connected, so Android still lists this machine as its
+    headset, but with SCO refused a call or a voice note uses the phone's own mic.
+    """
+    path = state["hfp"].get("path")
+    if not path:
+        return
+    try:
+        props = dbus.Interface(session.get_object(TEL, path), "org.freedesktop.DBus.Properties")
+        iface = f"{TEL}.AudioGatewayTransport1"
+        if bool(props.Get(iface, "RejectSCO")) != reject:
+            props.Set(iface, "RejectSCO", dbus.Boolean(reject))
     except dbus.DBusException:
         pass
 
@@ -781,10 +874,13 @@ def apply_audio():
         # Only when the link disagrees with the route, and at most once every 15s:
         # BlueZ answers a repeated ConnectProfile with br-connection-busy and can
         # wedge there until the device is bounced. The card is a fair proxy for
-        # "some audio profile is up", since both are switched together.
+        # "A2DP is up" (hands-free alone makes none).
         if (want == "pc") != bool(card) and time.time() - audio["btAt"] > 15:
             audio["btAt"] = time.time()
             GLib.idle_add(lambda: (set_bt_audio(want == "pc"), False)[1])
+        here = call_here()
+        headset_for_call(here)
+        GLib.idle_add(lambda: (set_reject_sco(not here), False)[1])
         audio["route"] = want
         state["audio"] = {"route": want, "mode": audio["mode"], "screenOn": audio["screenOn"],
                           "playing": audio["playing"]}
@@ -797,12 +893,14 @@ def audio_now():
 
 def audio_work():
     serial = state["phone"]["serial"]
-    if serial:
-        out = run("adb", "-s", serial, "shell", "dumpsys deviceidle | grep -m1 mScreenOn", timeout=4)
-        m = re.search(r"mScreenOn=(\w+)", out)
-        if m and (m.group(1) == "true") != audio["screenOn"]:
-            audio["screenOn"] = m.group(1) == "true"
-            audio["since"] = time.time()
+    out = run("adb", "-s", serial, "shell", "dumpsys deviceidle | grep -m1 mScreenOn", timeout=4) if serial else ""
+    m = re.search(r"mScreenOn=(\w+)", out)
+    # No adb answer means we cannot see the screen: assume it is on, so the
+    # audio stays on the phone instead of freezing on a stale "dark" reading.
+    on = m.group(1) == "true" if m else True
+    if on != audio["screenOn"]:
+        audio["screenOn"] = on
+        audio["since"] = time.time()
     audio["playing"] = media_playing()
     apply_audio()
     GLib.idle_add(lambda: (changed(), False)[1])
@@ -1058,6 +1156,7 @@ def command(cmd: dict):
         if p:
             answered_here.add(p)
             tel_call(p, "Answer")
+            GLib.timeout_add(700, lambda: (activate_sco(), False)[1])
     elif c == "hangup":
         p = active_call(cmd.get("path", ""))
         if p:
@@ -1121,6 +1220,10 @@ def command(cmd: dict):
         if mode in ("follow", "pc", "phone"):
             audio["mode"] = mode
             audio_tick()
+    elif c == "plugin" and kd and str(cmd.get("name")) in SHARE_PLUGINS:
+        kdec(f"/devices/{kd}", "org.kde.kdeconnect.device").setPluginEnabled(
+            "kdeconnect_" + str(cmd["name"]), bool(cmd.get("on")))
+        kdec_scan()
     elif c == "photos":
         open_photos()
     elif c == "share" and kd:
@@ -1187,8 +1290,31 @@ def on_stdin(fd, cond):
 
 
 # ------------------------------------------------------------------ main
+SUPERSEDED = 75  # exit code: a newer phoned took over, the shell must not restart this one
+
+
+def take_over():
+    """Be the only phoned. The shell can create the island service twice (an async
+    load races a rescan), and two daemons fight over the Bluetooth audio route.
+    The newest one wins, because the shell keeps the last instance it created."""
+    pidfile = os.path.join(STATE_DIR, "phoned.pid")
+    try:
+        with open(pidfile) as f:
+            old = int(f.read().strip() or 0)
+        with open(f"/proc/{old}/cmdline", "rb") as f:
+            if old != os.getpid() and b"phoned.py" in f.read():
+                os.kill(old, signal.SIGTERM)
+    except (OSError, ValueError):
+        pass
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(pidfile, "w") as f:
+        f.write(str(os.getpid()))
+    signal.signal(signal.SIGTERM, lambda *a: os._exit(SUPERSEDED))
+
+
 def main():
     global loop
+    take_over()
     session.add_signal_receiver(on_tel_added, "InterfacesAdded", "org.freedesktop.DBus.ObjectManager", TEL)
     session.add_signal_receiver(on_tel_removed, "InterfacesRemoved", "org.freedesktop.DBus.ObjectManager", TEL)
     session.add_signal_receiver(on_tel_props, "PropertiesChanged", "org.freedesktop.DBus.Properties", TEL, path_keyword="path")
