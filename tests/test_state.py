@@ -62,6 +62,13 @@ class BluetoothRetry(unittest.TestCase):
         self.assertEqual(phoned.bt_retry["wait"], phoned.BT_RETRY_MIN)
 
 
+class RadioName(unittest.TestCase):
+    def test_skips_wifi_calling_and_names_5g(self):
+        self.assertEqual(phoned.radio_name("IWLAN,LTE"), "LTE")
+        self.assertEqual(phoned.radio_name("NR_SA,IWLAN"), "5G")
+        self.assertEqual(phoned.radio_name("IWLAN,Unknown"), "")
+
+
 class SocketAnswers(unittest.TestCase):
     def test_thread_is_oldest_first_and_limited(self):
         msgs = {i: {"uid": i, "date": 1000 - i, "body": str(i)} for i in range(5)}

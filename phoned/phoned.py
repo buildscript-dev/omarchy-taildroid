@@ -232,6 +232,24 @@ def adb_props(serial):
     changed()
 
 
+def radio_name(types: str) -> str:
+    """First cellular radio in gsm.network.type ("LTE,IWLAN"), named like KDE Connect names it."""
+    for t in types.split(","):
+        t = t.strip().upper()
+        if t and t not in ("IWLAN", "UNKNOWN"):
+            return "5G" if t.startswith("NR") else t
+    return ""
+
+
+def set_signal(network, strength):
+    # KDE Connect reads the data SIM, and says "Unknown" when that SIM rides
+    # Wi-Fi calling (IWLAN). Ask adb which radio the SIMs are really on.
+    serial = state["phone"]["serial"]
+    if network == "Unknown" and serial:
+        network = radio_name(run("adb", "-s", serial, "shell", "getprop gsm.network.type", timeout=4)) or network
+    state["signal"] = {"network": network, "strength": strength}
+
+
 def parse_devices(block: str):
     devs = []
     for line in block.splitlines():
@@ -657,7 +675,7 @@ def kdec_scan():
             state["battery"] = {"level": lvl, "charging": kdec_prop(base + "/battery", "org.kde.kdeconnect.device.battery", "isCharging", False)}
         net = kdec_prop(base + "/connectivity_report", "org.kde.kdeconnect.device.connectivity_report", "cellularNetworkType", "")
         if net:
-            state["signal"] = {"network": net, "strength": kdec_prop(base + "/connectivity_report", "org.kde.kdeconnect.device.connectivity_report", "cellularNetworkStrength", -1)}
+            set_signal(net, kdec_prop(base + "/connectivity_report", "org.kde.kdeconnect.device.connectivity_report", "cellularNetworkStrength", -1))
     changed()
     return True
 
@@ -678,7 +696,7 @@ def on_kdec_signal(*args, **kw):
         state["battery"] = {"level": int(args[1]), "charging": bool(args[0])}
         changed()
     elif member == "refreshed" and path.endswith("/connectivity_report"):
-        state["signal"] = {"network": str(args[0]), "strength": int(args[1])}
+        set_signal(str(args[0]), int(args[1]))
         changed()
     elif member == "notificationRemoved":
         drop_notif(str(args[0]))
