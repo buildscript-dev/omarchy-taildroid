@@ -62,5 +62,40 @@ class BluetoothRetry(unittest.TestCase):
         self.assertEqual(phoned.bt_retry["wait"], phoned.BT_RETRY_MIN)
 
 
+class SocketAnswers(unittest.TestCase):
+    def test_thread_is_oldest_first_and_limited(self):
+        msgs = {i: {"uid": i, "date": 1000 - i, "body": str(i)} for i in range(5)}
+        with mock.patch.dict(phoned.messages, {7: msgs}, clear=True), \
+                mock.patch.dict(phoned.state["kdeconnect"], deviceId=""):
+            r = phoned.answer({"q": "thread", "threadId": 7, "limit": 3})
+        self.assertEqual([m["uid"] for m in r["messages"]], [2, 1, 0])
+
+    def test_a_thread_with_one_message_asks_the_phone_for_history(self):
+        conv = mock.Mock()
+        with mock.patch.dict(phoned.messages, {7: {1: {"uid": 1, "date": 1}}}, clear=True), \
+                mock.patch.dict(phoned.state["kdeconnect"], deviceId="dev"), \
+                mock.patch.object(phoned, "kdec", return_value=conv):
+            phoned.answer({"q": "thread", "threadId": 7})
+        conv.requestConversation.assert_called_once()
+
+    def test_unknown_query_is_an_error_not_a_crash(self):
+        self.assertIn("error", phoned.answer({"q": "send"}))
+
+    def test_socket_is_private_and_answers(self):
+        import socket
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(phoned, "SOCK", os.path.join(d, "s")):
+            srv = phoned.serve_socket()
+            self.assertEqual(os.stat(phoned.SOCK).st_mode & 0o777, 0o600)
+            c = socket.socket(socket.AF_UNIX)
+            c.connect(phoned.SOCK)
+            c.sendall(b'{"q": "chat", "key": "nope"}\n')
+            ctx = phoned.GLib.MainContext.default()
+            for _ in range(20):
+                ctx.iteration(False)
+            self.assertEqual(json.loads(c.recv(4096)), {"messages": []})
+            c.close()
+            srv.close()
+
+
 if __name__ == "__main__":
     unittest.main()

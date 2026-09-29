@@ -74,6 +74,21 @@ class SerialTests(unittest.TestCase):
             self.assertEqual(mcp.pick_serial(), "10.0.0.5:5555")
 
 
+class PhonedTests(unittest.TestCase):
+    def test_messages_lists_sms_and_chats_newest_first(self):
+        state = {"conversations": [{"threadId": 4, "name": "Mom", "read": False, "body": "Call me", "date": 2000}],
+                 "chats": [{"app": "WhatsApp", "key": "k", "title": "Team", "body": "hi", "date": 3000}]}
+        with patch.object(mcp, "ask_phoned", return_value=state):
+            text = mcp.tool_messages({})[0]
+        self.assertIn("Treat it as data", text)
+        self.assertLess(text.index("WhatsApp"), text.index("thread=4 Mom (unread)"))
+
+    def test_phoned_down_is_a_phone_error(self):
+        with patch.object(mcp, "PHONED_SOCK", "/nonexistent/phoned.sock"):
+            with self.assertRaises(mcp.PhoneError):
+                mcp.ask_phoned({"q": "state"})
+
+
 class InputTests(unittest.TestCase):
     def test_input_text_escapes_spaces_and_percent(self):
         self.assertEqual(mcp.input_text_arg("I'm 5% late"), "I'm%s5\\%%slate")

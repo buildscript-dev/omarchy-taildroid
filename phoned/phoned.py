@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -89,14 +90,17 @@ except (OSError, ValueError):
     pass
 
 
-def remember(**kw):
-    """Write-then-rename: a kill mid-write must not leave a torn phone.json
-    (the MCP server reads it too)."""
-    memory.update(kw)
-    tmp = MEMORY + ".tmp"
+def write_json(path, obj):
+    """Write-then-rename: a kill mid-write must not leave a torn file behind."""
+    tmp = path + ".tmp"
     with open(tmp, "w") as f:
-        json.dump(memory, f)
-    os.replace(tmp, MEMORY)
+        json.dump(obj, f)
+    os.replace(tmp, path)
+
+
+def remember(**kw):
+    memory.update(kw)
+    write_json(MEMORY, memory)
 
 
 # ------------------------------------------------------------------ output
@@ -970,8 +974,7 @@ def load_chats():
 
 def save_chats():
     try:
-        with open(CHATS, "w") as f:
-            json.dump(chat_log, f)
+        write_json(CHATS, chat_log)
     except OSError:
         pass
 
@@ -1344,9 +1347,84 @@ def take_over():
         f.write(str(os.getpid()))
 
 
+# ------------------------------------------------------------------ socket
+# Other programs (the MCP server, scripts) ask phoned instead of reaching the
+# phone on their own. Read-only: one JSON request line in, one JSON line out.
+SOCK = os.path.join(STATE_DIR, "phoned.sock")
+
+
+def answer(req):
+    q = req.get("q")
+    if q == "state":
+        return {**state, "calls": sorted(calls.values(), key=lambda c: c["since"]),
+                "conversations": sorted(threads.values(), key=lambda t: -t["date"])[:250]}
+    if q == "thread":
+        tid = int(req.get("threadId", 0))
+        kd = state["kdeconnect"]["deviceId"]
+        if kd and len(messages.get(tid, {})) < 2:  # only the last message cached: ask the phone for history
+            try:
+                kdec(f"/devices/{kd}", "org.kde.kdeconnect.device.conversations").requestConversation(
+                    dbus.Int64(tid), 0, 400)
+            except dbus.DBusException:
+                pass
+        msgs = sorted(messages.get(tid, {}).values(), key=lambda m: m["date"])[-int(req.get("limit", 400)):]
+        return {"threadId": tid, "messages": msgs}
+    if q == "chat":
+        return chat_log.get(str(req.get("key", "")), {"messages": []})
+    return {"error": f"unknown query {q!r}; try state, thread or chat"}
+
+
+def on_client(conn, buf):
+    try:
+        chunk = conn.recv(65536)
+    except OSError:
+        chunk = b""
+    buf += chunk
+    if chunk and b"\n" not in buf and len(buf) < 65536:
+        return True  # keep reading
+    try:
+        reply = answer(json.loads(buf.split(b"\n", 1)[0] or b"{}"))
+    except (ValueError, TypeError, AttributeError) as e:
+        reply = {"error": f"bad request: {e}"}
+    try:
+        conn.sendall(json.dumps(reply, ensure_ascii=False).encode() + b"\n")
+    except OSError:
+        pass
+    conn.close()
+    return False
+
+
+def on_accept(srv, _cond):
+    try:
+        conn, _ = srv.accept()
+    except OSError:
+        return True
+    conn.settimeout(5)  # a stuck client must not freeze phoned
+    buf = bytearray()
+    GLib.io_add_watch(conn.fileno(), GLib.IO_IN | GLib.IO_HUP, lambda *_: on_client(conn, buf))
+    return True
+
+
+def serve_socket():
+    try:
+        os.unlink(SOCK)
+    except FileNotFoundError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old = os.umask(0o177)  # 0600 from the start: messages are private
+    try:
+        srv.bind(SOCK)
+    finally:
+        os.umask(old)
+    srv.listen(8)
+    GLib.io_add_watch(srv.fileno(), GLib.IO_IN, lambda *_: on_accept(srv, None))
+    return srv
+
+
 def main():
     global loop
     take_over()
+    serve_socket()
     session.add_signal_receiver(on_tel_added, "InterfacesAdded", "org.freedesktop.DBus.ObjectManager", TEL)
     session.add_signal_receiver(on_tel_removed, "InterfacesRemoved", "org.freedesktop.DBus.ObjectManager", TEL)
     session.add_signal_receiver(on_tel_props, "PropertiesChanged", "org.freedesktop.DBus.Properties", TEL, path_keyword="path")

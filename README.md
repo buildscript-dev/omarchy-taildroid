@@ -9,7 +9,7 @@ The Dynamic Island loads `Service.qml`; the bar widget is optional.
 | Piece | What it does |
 |---|---|
 | `mirror/` → `~/.local/bin/taildroid-mirror` | Qt6 client for the scrcpy server (pinned to the system scrcpy). Galaxy frame or official Samsung emulator skin, H.265 up to 120 fps, VA-API decode on the AMD iGPU, UHID keyboard, touch, clipboard, audio via a video-less scrcpy. |
-| `phoned/phoned.py` | One daemon: adb presence + Wi-Fi reconnect, BlueZ phone link, PipeWire HFP telephony (`org.pipewire.Telephony`), KDE Connect (SMS threads, battery, signal, contacts, photos, find phone). JSON lines over stdin/stdout. |
+| `phoned/phoned.py` | One daemon: adb presence + Wi-Fi reconnect, BlueZ phone link, PipeWire HFP telephony (`org.pipewire.Telephony`), KDE Connect (SMS threads, battery, signal, contacts, photos, find phone). JSON lines over stdin/stdout to the shell, plus a read-only socket for other programs (see [phoned socket](#phoned-socket)). |
 | `Service.qml` | Runs phoned, launches mirrors (phone, DeX, single app, webcam), exposes `calls`, `conversations`, `answer()`, `dial()`, `sendSms()`… |
 | `mcp/taildroid_mcp.py` | MCP server so an AI assistant (Claude Code…) can see and drive the phone over USB or Wi-Fi adb. See [AI control](#ai-control). |
 | Island | Incoming-call pill (answer/decline), call live activity, Control Center pages: Phone, Call/Keypad, Messages, Thread. |
@@ -57,6 +57,11 @@ adb reconnects over Wi-Fi at once, calls route through the hands-free link,
 contacts sync over PBAP (bluez-obex), battery comes from BlueZ, phone music
 shows in the island (mpris-proxy), and the Hotspot button tethers through the
 phone (Bluetooth PAN via NetworkManager).
+
+While adb sees the phone but Bluetooth does not, phoned asks BlueZ to connect,
+backing off from 1 to 10 minutes. If `bluetoothctl connect` keeps answering
+`br-connection-busy`, restart bluetooth (`sudo systemctl restart bluetooth`) or
+remove the phone on both sides and pair again.
 
 ## Audio route
 
@@ -110,7 +115,10 @@ claude mcp add --scope user taildroid -- python3 ~/.config/omarchy/plugins/io.gi
 
 Tools: `screen` (numbered element list, optional screenshot with the numbers drawn on), `wait_for`, `tap`,
 `long_press`, `swipe`, `scroll`, `type`, `key`, `open_app`, `list_apps`,
-`notifications`, `sms`, `call`, `device`, `connection`.
+`notifications`, `sms`, `call`, `device`, `connection`, and from phoned (no adb
+needed): `messages` (SMS threads and chat-app conversations, or one thread's
+history) and `status` (battery, signal, Bluetooth and hands-free link, calls,
+audio route, KDE Connect).
 
 - Acts by element number from the last `screen`, or by x,y. Every action
   returns the new screen, so a step is one call (about 3 s on USB; the
@@ -127,7 +135,24 @@ Tools: `screen` (numbered element list, optional screenshot with the numbers dra
   short control-only scrcpy session that sets the phone clipboard and pastes
   (it replaces what was on the phone's clipboard).
 
-Tests: `python3 -m unittest tests/test_mcp.py`.
+Tests: `python3 -m unittest discover -s tests`.
+
+## phoned socket
+
+phoned answers read-only questions on `~/.local/state/taildroid/phoned.sock`
+(mode 0600, only your user). Send one JSON line, get one JSON line back:
+
+```sh
+echo '{"q":"state"}' | socat - UNIX-CONNECT:$HOME/.local/state/taildroid/phoned.sock
+```
+
+| Query | Answer |
+|---|---|
+| `{"q":"state"}` | Everything the island sees: phone, battery, signal, Bluetooth, hands-free, calls, audio route, conversations, chats. |
+| `{"q":"thread","threadId":N,"limit":400}` | One SMS thread, oldest first. With only the last message cached, phoned asks the phone for the history; ask again a moment later. |
+| `{"q":"chat","key":K}` | One chat-app conversation kept from notifications. |
+
+Nothing on the socket sends, dials or changes a setting.
 
 ## Check
 
