@@ -11,6 +11,8 @@ Item {
   // Only one Service may run phoned: two daemons fight over the Bluetooth audio
   // route and bounce A2DP every few seconds. The bar widget sets this false.
   property bool runPhoned: true
+  property bool poll: true  // the panel's copy polls only while open; the island's always
+  property bool _startAfterRefresh: false
 
   property bool adbInstalled: false
   property bool scrcpyInstalled: false
@@ -175,6 +177,11 @@ Item {
       return
     }
     if (!target || target.state !== "device") {
+      if (!poll && !_startAfterRefresh) {  // device list may be stale: look again first
+        _startAfterRefresh = true
+        refresh()
+        return
+      }
       if (onlinePeer && !_startAfterConnect) {
         _startAfterConnect = true
         connectTailscale()
@@ -357,7 +364,7 @@ Item {
     id: refreshTimer
     interval: root.refreshIntervalSec * 1000
     repeat: true
-    running: true
+    running: root.poll
     triggeredOnStart: true
     onTriggered: root.refresh()
   }
@@ -403,6 +410,10 @@ Item {
       else {
         root.lastError = root.elideStatus(stderr || stdout || "Could not read phone status")
         root.statusText = root.lastError
+      }
+      if (root._startAfterRefresh) {
+        root.startControl(null)
+        root._startAfterRefresh = false
       }
     }
   }

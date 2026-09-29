@@ -180,6 +180,7 @@ Panel {
     id: phone
     settings: root.settings
     runPhoned: false  // the island's Service owns phoned
+    poll: root.opened || sessionRunning  // the island's Service already polls in the background
   }
 
   Connections {

@@ -133,9 +133,21 @@ class InputTests(unittest.TestCase):
         self.assertEqual(msg[14:], "hé".encode())
 
     def test_shell_quotes_every_argument(self):
-        with patch.object(mcp, "pick_serial", return_value="S1"), patch.object(mcp, "run", return_value=b"") as run:
+        with patch.dict(mcp._serial, {"id": ""}), patch.object(mcp, "pick_serial", return_value="S1"), \
+                patch.object(mcp, "run", return_value=b"") as run:
             mcp.shell("input", "text", "a;reboot")
         self.assertEqual(run.call_args[0][0], ["adb", "-s", "S1", "exec-out", "input text 'a;reboot'"])
+
+    def test_one_adb_lookup_per_tool_call(self):
+        def two_commands(a):
+            mcp.shell("true")
+            mcp.shell("true")
+            return ["ok"]
+        with patch.dict(mcp.TOOLS, {"t": (two_commands, "", {})}), patch.dict(mcp._serial, {"id": "gone"}), \
+                patch.object(mcp, "pick_serial", return_value="S1") as pick, patch.object(mcp, "run", return_value=b""):
+            mcp.call_tool("t", {})
+            mcp.call_tool("t", {})
+        self.assertEqual(pick.call_count, 2)  # once per call, never the stale "gone"
 
     def test_sms_and_call_refuse_non_numbers(self):
         for tool in (mcp.tool_sms, mcp.tool_call):

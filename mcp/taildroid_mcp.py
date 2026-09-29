@@ -94,8 +94,12 @@ def shell(*args: str, timeout: float = 10.0) -> str:
     return exec_out(*args, timeout=timeout).decode(errors="replace")
 
 
+_serial = {"id": ""}  # cleared per tool call: one call runs several commands, one adb lookup
+
+
 def exec_out(*args: str, timeout: float = 15.0) -> bytes:
-    return run(["adb", "-s", pick_serial(), "exec-out", " ".join(shlex.quote(a) for a in args)],
+    _serial["id"] = _serial["id"] or pick_serial()
+    return run(["adb", "-s", _serial["id"], "exec-out", " ".join(shlex.quote(a) for a in args)],
                timeout=timeout, binary=True)
 
 
@@ -682,6 +686,7 @@ def call_tool(name: str, args: dict) -> dict:
     if name not in TOOLS:
         return {"content": [{"type": "text", "text": f"Unknown tool {name}"}], "isError": True}
     try:
+        _serial["id"] = ""  # the phone may have been unplugged or moved to Wi-Fi since
         parts = TOOLS[name][0](args or {})
     except (PhoneError, ValueError, KeyError, ET.ParseError) as e:
         return {"content": [{"type": "text", "text": str(e) or type(e).__name__}], "isError": True}
