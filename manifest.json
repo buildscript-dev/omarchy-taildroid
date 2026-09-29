@@ -23,13 +23,7 @@
       "adbPort": 5555,
       "preferredPeer": "",
       "preferredSerial": "",
-      "pairAddress": "",
-      "audioEnabled": true,
-      "clipboardAutosync": true,
-      "stayAwake": true,
-      "turnScreenOff": false,
-      "alwaysOnTop": false,
-      "maxSize": 0
+      "pairAddress": ""
     },
     "schema": [
       {
@@ -71,46 +65,6 @@
         "label": "Wireless pairing address",
         "description": "Optional default host:port shown in the pairing fields. Pairing codes are entered in the panel and are not stored.",
         "defaultValue": ""
-      },
-      {
-        "key": "audioEnabled",
-        "type": "boolean",
-        "label": "Forward phone audio",
-        "defaultValue": true
-      },
-      {
-        "key": "clipboardAutosync",
-        "type": "boolean",
-        "label": "Sync clipboard with the phone",
-        "description": "scrcpy copies the desktop clipboard to the phone and the other way around. Turn off if you do not want passwords to cross the session.",
-        "defaultValue": true
-      },
-      {
-        "key": "stayAwake",
-        "type": "boolean",
-        "label": "Keep phone awake while controlling",
-        "defaultValue": true
-      },
-      {
-        "key": "turnScreenOff",
-        "type": "boolean",
-        "label": "Turn phone screen off while mirroring",
-        "defaultValue": false
-      },
-      {
-        "key": "alwaysOnTop",
-        "type": "boolean",
-        "label": "Keep scrcpy window always on top",
-        "defaultValue": false
-      },
-      {
-        "key": "maxSize",
-        "type": "integer",
-        "label": "Max mirror size (0 = native)",
-        "min": 0,
-        "max": 4096,
-        "step": 64,
-        "defaultValue": 0
       }
     ]
   }

@@ -77,6 +77,7 @@ int main(int argc, char **argv) {
       {"start-app", "Launch an app, e.g. com.samsung.android.messaging.", "app"},
       {"screen-off", "Turn the phone panel off while mirroring."},
       {"no-audio", "Don't forward phone audio."},
+      {"no-clipboard", "Don't copy the phone's clipboard to the desktop (Ctrl+V still pastes)."},
       {"title", "Window title.", "title"},
   };
   cli.addOptions(opts);
@@ -99,6 +100,7 @@ int main(int argc, char **argv) {
   o.flexDisplay = cli.isSet("flex");
   o.startApp = cli.value("start-app");
   o.screenOff = cli.isSet("screen-off");
+  o.clipboardSync = !cli.isSet("no-clipboard");
 
   Session session(o);
 

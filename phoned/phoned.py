@@ -14,6 +14,7 @@ Protocol: JSON lines. stdout gets {"type":"state",...} snapshots and
 from __future__ import annotations
 
 import base64
+import fcntl
 import glob
 import json
 import os
@@ -89,9 +90,13 @@ except (OSError, ValueError):
 
 
 def remember(**kw):
+    """Write-then-rename: a kill mid-write must not leave a torn phone.json
+    (the MCP server reads it too)."""
     memory.update(kw)
-    with open(MEMORY, "w") as f:
+    tmp = MEMORY + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(memory, f)
+    os.replace(tmp, MEMORY)
 
 
 # ------------------------------------------------------------------ output
@@ -278,6 +283,10 @@ def wifi_reconnect():
 
 
 # ------------------------------------------------------------------ bluetooth
+BT_RETRY_MIN, BT_RETRY_MAX = 60, 600
+bt_retry = {"at": 0.0, "wait": BT_RETRY_MIN}
+
+
 def bt_scan():
     try:
         om = dbus.Interface(system.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
@@ -316,10 +325,17 @@ def bt_scan():
                 event("away", name=new["name"])
             changed()
         # The phone is around (adb sees it) but its Bluetooth link dropped.
-        if not new["connected"] and state["phone"]["serial"]:
+        # Back off: a Connect sent while BlueZ is still paging answers
+        # br-connection-busy, and a steady stream of them kept that device
+        # "busy" until it was unpaired.
+        if new["connected"]:
+            bt_retry.update(at=0, wait=BT_RETRY_MIN)
+        elif state["phone"]["serial"] and time.time() >= bt_retry["at"]:
+            bt_retry["at"] = time.time() + bt_retry["wait"]
+            bt_retry["wait"] = min(bt_retry["wait"] * 2, BT_RETRY_MAX)
             try:
                 dbus.Interface(system.get_object("org.bluez", path), "org.bluez.Device1").Connect(
-                    reply_handler=lambda: None, error_handler=lambda e: None)
+                    reply_handler=lambda: None, error_handler=lambda e: None, timeout=60)
             except dbus.DBusException:
                 pass
     return True
@@ -1033,7 +1049,9 @@ def emit_chat():
 
 
 def publish_notifs():
-    state["phoneNotifs"] = sorted(phone_notifs.values(), key=lambda n: n["id"])
+    # KDE Connect ids are counters as strings: "10" must follow "9".
+    state["phoneNotifs"] = sorted(phone_notifs.values(),
+                                  key=lambda n: (0, int(n["id"])) if n["id"].isdigit() else (1, n["id"]))
     changed()
 
 
@@ -1307,19 +1325,23 @@ def take_over():
     """Be the only phoned. The shell can create the island service twice (an async
     load races a rescan), and two daemons fight over the Bluetooth audio route.
     The newest one wins, because the shell keeps the last instance it created."""
-    pidfile = os.path.join(STATE_DIR, "phoned.pid")
-    try:
-        with open(pidfile) as f:
-            old = int(f.read().strip() or 0)
-        with open(f"/proc/{old}/cmdline", "rb") as f:
-            if old != os.getpid() and b"phoned.py" in f.read():
-                os.kill(old, signal.SIGTERM)
-    except (OSError, ValueError):
-        pass
     os.makedirs(STATE_DIR, exist_ok=True)
-    with open(pidfile, "w") as f:
-        f.write(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *a: os._exit(SUPERSEDED))
+    # Locked read-kill-write: two phoneds starting together take turns, so the
+    # second one always sees (and replaces) the first instead of both killing.
+    with open(os.path.join(STATE_DIR, "phoned.pid"), "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        try:
+            old = int(f.read().strip() or 0)
+            with open(f"/proc/{old}/cmdline", "rb") as c:
+                if old != os.getpid() and b"phoned.py" in c.read():
+                    os.kill(old, signal.SIGTERM)
+        except (OSError, ValueError):
+            pass
+        f.seek(0)
+        f.truncate()
+        f.write(str(os.getpid()))
 
 
 def main():

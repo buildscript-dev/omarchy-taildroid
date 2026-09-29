@@ -26,7 +26,7 @@ if [ -n "$bt" ]; then
 else
   no "phone not paired over Bluetooth (calls)" "Settings → Bluetooth on the PC, pair the phone, allow calls/contacts"
 fi
-busctl --user tree org.pipewire.Telephony 2>/dev/null | grep -q ag && ok "calls ready (hands-free link)" || no "no hands-free link yet" "phone Bluetooth settings → this PC → Calls on"
+busctl --user call org.pipewire.Telephony /org/pipewire/Telephony org.freedesktop.DBus.ObjectManager GetManagedObjects 2>/dev/null | grep -q AudioGateway1 && ok "calls ready (hands-free link)" || no "no hands-free link yet" "phone Bluetooth settings → this PC → Calls on"
 if busctl --user list 2>/dev/null | grep -q org.kde.kdeconnect; then
   n=$(busctl --user call org.kde.kdeconnect /modules/kdeconnect org.kde.kdeconnect.daemon devices bb false true 2>/dev/null | awk '{print $2}')
   [ "${n:-0}" -gt 0 ] && ok "KDE Connect paired" || no "KDE Connect not paired" "open KDE Connect on the phone, pair with this PC, allow SMS/contacts/notifications"

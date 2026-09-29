@@ -14,14 +14,6 @@ function intSetting(settings, name, fallback, min, max) {
   return n
 }
 
-function boolSetting(settings, name, fallback) {
-  var value = setting(settings, name, fallback)
-  if (typeof value === "boolean") return value
-  var text = String(value).toLowerCase()
-  if (text === "true" || text === "1" || text === "on") return true
-  if (text === "false" || text === "0" || text === "off") return false
-  return fallback
-}
 
 function parseJson(raw) {
   try {
@@ -100,25 +92,3 @@ function pickDevice(devices, preferredSerial) {
   return list.length > 0 ? list[0] : null
 }
 
-function scrcpyCommand(scrcpyPath, device, settings) {
-  var cmd = [scrcpyPath || "scrcpy"]
-  if (device && device.serial) {
-    cmd.push("--serial")
-    cmd.push(String(device.serial))
-  }
-  cmd.push("--keyboard=uhid")
-  cmd.push("--mouse=uhid")
-  var title = displayDeviceName(device)
-  cmd.push("--window-title=" + title)
-  if (boolSetting(settings, "stayAwake", true)) cmd.push("--stay-awake")
-  if (boolSetting(settings, "turnScreenOff", false)) cmd.push("--turn-screen-off")
-  if (boolSetting(settings, "alwaysOnTop", false)) cmd.push("--always-on-top")
-  if (!boolSetting(settings, "audioEnabled", true)) cmd.push("--no-audio")
-  if (!boolSetting(settings, "clipboardAutosync", true)) cmd.push("--no-clipboard-autosync")
-  var maxSize = intSetting(settings, "maxSize", 0, 0, 4096)
-  if (maxSize > 0) {
-    cmd.push("--max-size")
-    cmd.push(String(maxSize))
-  }
-  return cmd
-}

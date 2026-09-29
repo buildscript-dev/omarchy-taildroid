@@ -34,7 +34,8 @@ frame are clickable (volume, power).
 
 `skin` (folder name under `~/.local/share/taildroid/skins/` or a path),
 `frameColor`, `codec` (h265/h264/av1), `bitrateMbps`, `maxFps`, `maxSize`,
-`screenOff` (phone panel off while mirroring), `audio`, `dexDisplay`.
+`screenOff` (phone panel off while mirroring), `audio`, `clipboard` (false keeps
+phone copies off the desktop clipboard; Ctrl+V still pastes), `dexDisplay`.
 
 Official skins: developer.samsung.com/galaxy-emulator-skin (Samsung account).
 Unzip into `~/.local/share/taildroid/skins/<Model>/` (the folder with `layout`).

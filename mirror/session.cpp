@@ -218,7 +218,7 @@ void Session::videoLoop() {
       QString("scid=%1").arg(m_scid, 8, 16, QChar('0')), "log_level=info", "audio=false", "tunnel_forward=true",
       "video_codec=" + m_opts.codec, QString("video_bit_rate=%1").arg(m_opts.bitRate),
       QString("max_fps=%1").arg(m_opts.maxFps), QString("max_size=%1").arg(m_opts.maxSize),
-      QString("stay_awake=%1").arg(m_opts.stayAwake ? "true" : "false"), "clipboard_autosync=true",
+      QString("stay_awake=%1").arg(m_opts.stayAwake ? "true" : "false"), QString("clipboard_autosync=%1").arg(m_opts.clipboardSync ? "true" : "false"),
       "power_off_on_close=false"};
   if (!m_opts.newDisplay.isEmpty()) serverArgs << "new_display=" + m_opts.newDisplay;
   if (m_opts.flexDisplay) serverArgs << "flex_display=true";
@@ -275,6 +275,10 @@ void Session::videoLoop() {
 
   const AVCodecID avId = codecId == CODEC_H265 ? AV_CODEC_ID_HEVC : codecId == CODEC_AV1 ? AV_CODEC_ID_AV1 : AV_CODEC_ID_H264;
   const AVCodec *codec = avcodec_find_decoder(avId);
+  if (!codec) {  // this FFmpeg build lacks the decoder (e.g. no AV1)
+    cleanup();
+    return setState("error", "This FFmpeg build cannot decode the phone's video codec");
+  }
   AVCodecContext *ctx = avcodec_alloc_context3(codec);
   ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
   AVBufferRef *hwDevice = nullptr;

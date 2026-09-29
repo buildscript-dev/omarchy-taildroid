@@ -35,6 +35,7 @@ public:
     QString startApp;
     bool screenOff = false;  // turn the phone panel off while mirroring
     bool stayAwake = true;
+    bool clipboardSync = true;  // phone copies land on the desktop clipboard
   };
 
   explicit Session(const Options &opts, QObject *parent = nullptr);
@@ -97,7 +98,6 @@ private:
   int m_w = 0, m_h = 0;
   bool m_screenOn = true;
 
-  QProcess *m_server = nullptr;
   QString m_version;
   quint32 m_scid = 0;
   int m_port = 0;

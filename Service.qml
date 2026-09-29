@@ -262,6 +262,7 @@ Item {
     if (skin !== "") cmd.push("--skin", skin)
     if (mirrorOpt("screenOff", true) === true) cmd.push("--screen-off")
     if (mirrorOpt("audio", true) !== true) cmd.push("--no-audio")
+    if (mirrorOpt("clipboard", true) !== true) cmd.push("--no-clipboard")
     var maxSize = Number(mirrorOpt("maxSize", 0))
     if (maxSize > 0) cmd.push("--max-size", String(maxSize))
     return cmd.concat(extra || [])
