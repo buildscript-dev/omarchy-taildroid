@@ -62,6 +62,32 @@ class BluetoothRetry(unittest.TestCase):
         self.assertEqual(phoned.bt_retry["wait"], phoned.BT_RETRY_MIN)
 
 
+class Pruning(unittest.TestCase):
+    def test_cache_keeps_newest_threads_messages_and_chats(self):
+        m = {1: {"a": {"date": 1, "attachments": [{"uid": "p1"}]}},
+             2: {"b": {"date": 5, "attachments": []}, "c": {"date": 6, "attachments": []}, "d": {"date": 7, "attachments": []}}}
+        t = {1: {"date": 1}, 2: {"date": 7}}
+        with mock.patch.dict(phoned.messages, m, clear=True), mock.patch.dict(phoned.threads, t, clear=True), \
+                mock.patch.dict(phoned.attachment_files, {"p1": "/x"}, clear=True), \
+                mock.patch.dict(phoned.open_thread, {"id": 0}):
+            phoned.prune_messages(2, per_thread=2, keep_threads=1)
+            self.assertEqual(list(phoned.threads), [2])
+            self.assertEqual(sorted(phoned.messages[2]), ["c", "d"])
+            self.assertEqual(phoned.attachment_files, {})
+        log = {str(i): {"date": i} for i in range(5)}
+        with mock.patch.dict(phoned.chat_log, log, clear=True), mock.patch.object(phoned, "write_json"):
+            phoned.save_chats(keep=2)
+            self.assertEqual(sorted(phoned.chat_log), ["3", "4"])
+
+
+class NeighborIp(unittest.TestCase):
+    def test_finds_the_phone_by_mac_after_an_address_change(self):
+        table = "192.168.1.1 dev wlo1 lladdr 90:f0 REACHABLE\n192.168.1.23 dev wlo1 lladdr 36:fb STALE\n"
+        self.assertEqual(phoned.neighbor_ip("36:fb", table), "192.168.1.23")
+        self.assertEqual(phoned.neighbor_ip("", table), "")
+        self.assertEqual(phoned.neighbor_ip("aa:bb", table), "")
+
+
 class RadioName(unittest.TestCase):
     def test_skips_wifi_calling_and_names_5g(self):
         self.assertEqual(phoned.radio_name("IWLAN,LTE"), "LTE")

@@ -220,7 +220,8 @@ def adb_props(serial):
     m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", wifi)
     if m:
         state["phone"]["wifiAddress"] = m.group(1)
-        remember(wifiAddress=m.group(1), model=model)
+        mac = neighbor_mac(m.group(1))
+        remember(wifiAddress=m.group(1), model=model, **({"wifiMac": mac} if mac else {}))
     battery = run("adb", "-s", serial, "shell", "dumpsys battery")
     lvl = re.search(r"level: (\d+)", battery)
     if lvl and state["battery"]["level"] < 0:
@@ -297,8 +298,23 @@ def start_track():
     return False
 
 
+def neighbor_mac(ip):
+    m = re.search(r"lladdr (\S+)", run("ip", "neigh", "show", ip))
+    return m.group(1) if m else ""
+
+
+def neighbor_ip(mac, table):
+    """The phone's current address on the LAN, found by its Wi-Fi MAC."""
+    for line in table.splitlines():
+        parts = line.split()
+        if mac and f"lladdr {mac}" in line and re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", parts[0]):
+            return parts[0]
+    return ""
+
+
 def wifi_reconnect():
-    addr = memory.get("wifiAddress")
+    # DHCP can hand the phone a new address; its MAC (per network) stays the same.
+    addr = neighbor_ip(memory.get("wifiMac", ""), run("ip", "-4", "neigh")) or memory.get("wifiAddress")
     if addr and state["phone"]["transport"] == "none":
         subprocess.Popen(["adb", "connect", f"{addr}:5555"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return True
@@ -613,6 +629,22 @@ def on_attachment(path, name):
     GLib.timeout_add(60, emit_thread)
 
 
+def prune_messages(tid, per_thread=400, keep_threads=250):
+    """Cap the cache, not just the view: the newest threads and their newest messages."""
+    msgs = messages.get(tid, {})
+    if len(msgs) > per_thread:
+        for uid in sorted(msgs, key=lambda u: msgs[u]["date"])[:len(msgs) - per_thread]:
+            del msgs[uid]
+    if len(threads) > keep_threads:
+        for old in sorted(threads, key=lambda k: -threads[k]["date"])[keep_threads:]:
+            if old != open_thread["id"]:
+                threads.pop(old, None)
+                messages.pop(old, None)
+        kept = {a["uid"] for ms in messages.values() for m in ms.values() for a in m["attachments"]}
+        for uid in [u for u in attachment_files if u not in kept]:
+            del attachment_files[uid]
+
+
 def on_conversation(msg):
     try:
         t = message_to_thread(msg)
@@ -622,6 +654,7 @@ def on_conversation(msg):
     old = threads.get(t["threadId"])
     if not old or t["date"] >= old["date"]:
         threads[t["threadId"]] = t
+    prune_messages(t["threadId"])
     if t["threadId"] == open_thread["id"]:
         GLib.timeout_add(60, emit_thread)
         GLib.timeout_add(80, lambda: (want_attachments(t["threadId"]), False)[1])
@@ -990,7 +1023,9 @@ def load_chats():
     publish_chats()
 
 
-def save_chats():
+def save_chats(keep=120):
+    for key in sorted(chat_log, key=lambda k: -chat_log[k]["date"])[keep:]:
+        del chat_log[key]
     try:
         write_json(CHATS, chat_log)
     except OSError:

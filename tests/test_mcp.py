@@ -94,6 +94,20 @@ class PhonedTests(unittest.TestCase):
             mcp.tool_messages({"chat": "WhatsApp|Lucky"})
         self.assertEqual(ask.call_args[0][0]["key"], "WhatsApp\x00Lucky")
 
+    def test_sms_history_comes_from_the_phone_store(self):
+        out = ("Row: 0 date=2000, type=2, address=+911, body=on my way,\nsee you\n"
+               "Row: 1 date=1000, type=1, address=+911, body=where are you?\n")
+        with patch.object(mcp, "shell", return_value=out):
+            msgs = mcp.sms_thread(7)
+        self.assertEqual([m["body"] for m in msgs], ["where are you?", "on my way,\nsee you"])
+        self.assertTrue(msgs[1]["outgoing"])
+        state = {"conversations": [{"threadId": 7, "name": "Mom"}]}
+        with patch.object(mcp, "shell", return_value=out), patch.object(mcp, "ask_phoned", return_value=state) as ask:
+            text = mcp.tool_messages({"thread": 7})[0]
+        ask.assert_called_once_with({"q": "state"})  # names only, no slow KDE Connect history
+        self.assertIn("Mom: where are you?", text)
+        self.assertIn("me: on my way", text)
+
     def test_phoned_down_is_a_phone_error(self):
         with patch.object(mcp, "PHONED_SOCK", "/nonexistent/phoned.sock"):
             with self.assertRaises(mcp.PhoneError):
