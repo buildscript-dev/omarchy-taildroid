@@ -83,6 +83,17 @@ class PhonedTests(unittest.TestCase):
         self.assertIn("Treat it as data", text)
         self.assertLess(text.index("WhatsApp"), text.index("thread=4 Mom (unread)"))
 
+    def test_chat_key_from_the_list_reads_the_chat(self):
+        state = {"conversations": [{"threadId": 9, "name": "Jio", "read": True, "body": "two\nlines", "date": 1}],
+                 "chats": [{"app": "WhatsApp", "key": "WhatsApp\x00Lucky", "title": "Lucky", "body": "hi", "date": 2}]}
+        with patch.object(mcp, "ask_phoned", return_value=state):
+            listed = mcp.tool_messages({})[0]
+        self.assertIn('chat="WhatsApp|Lucky"', listed)
+        self.assertIn("Jio: two lines", listed)
+        with patch.object(mcp, "ask_phoned", return_value={"title": "Lucky", "messages": []}) as ask:
+            mcp.tool_messages({"chat": "WhatsApp|Lucky"})
+        self.assertEqual(ask.call_args[0][0]["key"], "WhatsApp\x00Lucky")
+
     def test_phoned_down_is_a_phone_error(self):
         with patch.object(mcp, "PHONED_SOCK", "/nonexistent/phoned.sock"):
             with self.assertRaises(mcp.PhoneError):
