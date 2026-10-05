@@ -64,6 +64,16 @@ def devices() -> list[str]:
     return [l.split()[0] for l in out.splitlines()[1:] if l.strip().endswith("device")]
 
 
+def tailnet_phones(status_json: str) -> list[str]:
+    """The IPv4 tailnet addresses of the Android devices that are online now, from `tailscale status --json`."""
+    try:
+        peers = (json.loads(status_json).get("Peer") or {}).values()
+    except (ValueError, AttributeError):
+        return []
+    return [ip for p in peers if p.get("OS") == "android" and p.get("Online")
+            for ip in (p.get("TailscaleIPs") or []) if re.fullmatch(r"100(\.\d{1,3}){3}", ip)]
+
+
 def pick_serial() -> str:
     devs = devices()
     want = os.environ.get("TAILDROID_SERIAL", "")
@@ -80,6 +90,16 @@ def pick_serial() -> str:
     except (OSError, ValueError):
         addr = ""
     if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", addr or ""):
+        run(["adb", "connect", f"{addr}:5555"], timeout=6)
+        devs = devices()
+        if devs:
+            return devs[0]
+    # Away from home the Wi-Fi address is gone, but a phone with Tailscale on still answers on its tailnet address.
+    try:
+        peers = tailnet_phones(run(["tailscale", "status", "--json"], timeout=4))
+    except PhoneError:  # no tailscale here
+        peers = []
+    for addr in peers:
         run(["adb", "connect", f"{addr}:5555"], timeout=6)
         devs = devices()
         if devs:
@@ -807,4 +827,12 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-check"]:
+        st = json.dumps({"Peer": {"a": {"OS": "android", "Online": True, "TailscaleIPs": ["100.126.156.11", "fd7a::1"]},
+                                  "b": {"OS": "android", "Online": False, "TailscaleIPs": ["100.1.2.3"]},
+                                  "c": {"OS": "linux", "Online": True, "TailscaleIPs": ["100.9.9.9"]}}})
+        assert tailnet_phones(st) == ["100.126.156.11"]
+        assert tailnet_phones("not json") == [] and tailnet_phones("{}") == []
+        print("taildroid ok")
+        sys.exit(0)
     main()
