@@ -114,5 +114,20 @@ class PairStdinTests(unittest.TestCase):
             run.assert_not_called()
 
 
+class FromPhonedTests(unittest.TestCase):
+    KNOWN = {"phone": {"serial": "R5X", "model": "SM-S921E", "wifiAddress": "192.168.1.8"},
+             "battery": {"level": 73}}
+
+    def test_usb_and_wifi_entries_of_phoneds_phone_skip_adb(self):
+        for serial in ("R5X", "192.168.1.8:5555"):
+            dev = phone.from_phoned({"serial": serial, "state": "device"}, self.KNOWN)
+            self.assertEqual((dev["model"], dev["battery"]), ("SM-S921E", 73))
+
+    def test_other_or_unauthorized_devices_fall_back_to_adb(self):
+        self.assertIsNone(phone.from_phoned({"serial": "OTHER", "state": "device"}, self.KNOWN))
+        self.assertIsNone(phone.from_phoned({"serial": "R5X", "state": "unauthorized"}, self.KNOWN))
+        self.assertIsNone(phone.from_phoned({"serial": "R5X", "state": "device"}, {}))
+
+
 if __name__ == "__main__":
     unittest.main()

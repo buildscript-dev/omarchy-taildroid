@@ -32,6 +32,7 @@ public:
     int maxSize = 0;
     QString newDisplay;      // "WxH/dpi" for a virtual display (DeX / app window)
     bool flexDisplay = false;
+    bool noDecorations = false;  // virtual display without taskbar / system bars
     QString startApp;
     bool screenOff = false;  // turn the phone panel off while mirroring
     bool stayAwake = true;

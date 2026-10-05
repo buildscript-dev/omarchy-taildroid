@@ -31,3 +31,9 @@ if busctl --user list 2>/dev/null | grep -q org.kde.kdeconnect; then
   n=$(busctl --user call org.kde.kdeconnect /modules/kdeconnect org.kde.kdeconnect.daemon devices bb false true 2>/dev/null | awk '{print $2}')
   [ "${n:-0}" -gt 0 ] && ok "KDE Connect paired" || no "KDE Connect not paired" "open KDE Connect on the phone, pair with this PC, allow SMS/contacts/notifications"
 fi
+if [ -n "$serial" ] && adb -s "$serial" shell pm path org.kde.kdeconnect_tp &>/dev/null; then
+  adb -s "$serial" shell dumpsys deviceidle whitelist 2>/dev/null | grep -q kdeconnect_tp && ok "KDE Connect exempt from Doze (instant messages)" \
+    || no "KDE Connect sleeps with the phone (late notifications/SMS)" "adb shell dumpsys deviceidle whitelist +org.kde.kdeconnect_tp"
+fi
+w=$(iw dev 2>/dev/null | awk '/channel/{print $2; exit}')
+[ -n "$w" ] && { [ "$w" -gt 14 ] && ok "Wi-Fi on 5 GHz (channel $w)" || no "Wi-Fi on 2.4 GHz (channel $w) shares the radio with Bluetooth: choppy calls/buds" "nmcli con modify <wifi> 802-11-wireless.band a, then reconnect"; }

@@ -42,16 +42,21 @@ public:
   }
 };
 
+// Ready serials from `adb devices` output, in listed order.
+static QStringList readyDevices(const QByteArray &out) {
+  QStringList ready;
+  for (const QString &l : QString::fromUtf8(out).split('\n').mid(1)) {
+    const QStringList cols = l.simplified().split(' ');
+    if (cols.size() >= 2 && cols[1] == "device") ready << cols[0];
+  }
+  return ready;
+}
+
 static QString firstDevice() {
   QProcess p;
   p.start("adb", {"devices"});
   p.waitForFinished(5000);
-  const QStringList lines = QString::fromUtf8(p.readAll()).split('\n');
-  for (const QString &l : lines.mid(1)) {
-    const QStringList cols = l.simplified().split(' ');
-    if (cols.size() >= 2 && cols[1] == "device") return cols[0];
-  }
-  return {};
+  return readyDevices(p.readAll()).value(0);
 }
 
 int main(int argc, char **argv) {
@@ -74,6 +79,7 @@ int main(int argc, char **argv) {
       {"export-skin", "Save the built-in frame as a skin (layout + PNG) into this folder and exit.", "dir"},
       {"new-display", "Virtual display WxH/dpi (DeX, apps in their own window).", "spec"},
       {"flex", "Resize the virtual display with the window."},
+      {"no-decorations", "Virtual display without the taskbar and system bars (one app)."},
       {"start-app", "Launch an app, e.g. com.samsung.android.messaging.", "app"},
       {"screen-off", "Turn the phone panel off while mirroring."},
       {"no-audio", "Don't forward phone audio."},
@@ -98,6 +104,7 @@ int main(int argc, char **argv) {
   o.maxSize = cli.value("max-size").toInt();
   o.newDisplay = cli.value("new-display");
   o.flexDisplay = cli.isSet("flex");
+  o.noDecorations = cli.isSet("no-decorations");
   o.startApp = cli.value("start-app");
   o.screenOff = cli.isSet("screen-off");
   o.clipboardSync = !cli.isSet("no-clipboard");
@@ -136,12 +143,12 @@ int main(int argc, char **argv) {
   int retries = 0;
   QTimer retry;
   retry.setSingleShot(true);
-  QObject::connect(&retry, &QTimer::timeout, &app, [&] {
-    QString next = firstDevice();
-    QProcess p;
-    p.start("adb", {"devices"});
-    p.waitForFinished(3000);
-    if (QString::fromUtf8(p.readAll()).contains(session.serial() + "\tdevice")) next = session.serial();
+  // One async `adb devices` per attempt: a hung adb server must not freeze the window.
+  QProcess probe;
+  QObject::connect(&retry, &QTimer::timeout, &app, [&] { probe.start("adb", {"devices"}); });
+  QObject::connect(&probe, &QProcess::finished, &app, [&] {
+    const QStringList ready = readyDevices(probe.readAll());
+    const QString next = ready.contains(session.serial()) ? session.serial() : ready.value(0);
     if (next.isEmpty()) { if (++retries < 60) retry.start(2000); return; }
     session.restart(next);
   });

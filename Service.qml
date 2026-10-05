@@ -287,7 +287,7 @@ Item {
   function openApp(pkg) {
     var serial = readySerial()
     if (!serial || !pkg) return
-    Quickshell.execDetached(mirrorCommand({ serial: serial }, ["--frame", "none", "--new-display", "1080x2340/420", "--flex", "--start-app", String(pkg), "--no-audio"]))
+    Quickshell.execDetached(mirrorCommand({ serial: serial }, ["--new-display", "1080x2340/420", "--flex", "--no-decorations", "--start-app", String(pkg), "--no-audio"]))
   }
   function webcam() {
     var serial = readySerial()
@@ -356,9 +356,17 @@ Item {
         }
       }
     }
-    onExited: function(code) { if (code !== 75) phonedRestart.restart() }  // 75: a newer phoned took over
+    // 75: a newer phoned took over. Across a shell restart that newer one can
+    // belong to the dying shell and vanish with it, so check again later.
+    onExited: function(code) { if (code !== 75) phonedRestart.restart(); else phonedOrphanCheck.restart() }
   }
   Timer { id: phonedRestart; interval: 3000; onTriggered: phoned.running = root.runPhoned }
+  Timer { id: phonedOrphanCheck; interval: 5000; onTriggered: phonedAlive.running = root.runPhoned }
+  Process {
+    id: phonedAlive
+    command: ["sh", "-c", "p=$(cat \"${XDG_STATE_HOME:-$HOME/.local/state}/taildroid/phoned.pid\" 2>/dev/null); grep -qs phoned.py /proc/$p/cmdline"]
+    onExited: function(code) { if (code !== 0 && !phoned.running) phoned.running = root.runPhoned }
+  }
 
   Timer {
     id: refreshTimer

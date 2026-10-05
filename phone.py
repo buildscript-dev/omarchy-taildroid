@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import shutil
+import socket
 import subprocess
 import sys
 
@@ -223,6 +225,40 @@ def list_bluetooth() -> list[dict]:
     return devices
 
 
+def phoned_state() -> dict:
+    """phoned's view of the phone, or {} when phoned is not running."""
+    path = os.path.expanduser("~/.local/state/taildroid/phoned.sock")
+    try:
+        with socket.socket(socket.AF_UNIX) as s:
+            s.settimeout(1)
+            s.connect(path)
+            s.sendall(b'{"q":"state"}\n')
+            buf = b""
+            while not buf.endswith(b"\n"):
+                chunk = s.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+        return json.loads(buf)
+    except (OSError, ValueError):
+        return {}
+
+
+def from_phoned(dev: dict, known: dict) -> dict | None:
+    """Fill model and battery from phoned when it tracks this device, so a
+    status poll does not wake the phone over adb for what phoned already has."""
+    phone = known.get("phone") or {}
+    ip = phone.get("wifiAddress", "")
+    ours = dev.get("serial") == phone.get("serial") or (ip and dev.get("serial", "").startswith(ip + ":"))
+    if dev.get("state") != "device" or not ours or not phone.get("model"):
+        return None
+    dev["model"] = dev["name"] = phone["model"]
+    level = (known.get("battery") or {}).get("level", -1)
+    if isinstance(level, int) and level >= 0:
+        dev["battery"] = level
+    return dev
+
+
 def cmd_status(argv: list[str]) -> None:
     preferred = argv[0] if argv else ""
     adb_path = which("adb")
@@ -232,7 +268,8 @@ def cmd_status(argv: list[str]) -> None:
     if adb_path:
         code, out, err = run(["adb", "devices", "-l"], timeout=6)
         if code == 0:
-            devices = [enrich_device(dev) for dev in parse_adb_devices(out)]
+            known = phoned_state()
+            devices = [from_phoned(dev, known) or enrich_device(dev) for dev in parse_adb_devices(out)]
         else:
             adb_error = last_line(err or out or "adb devices failed")
     ok(

@@ -214,23 +214,36 @@ def contact_face(number: str) -> str:
 
 # ------------------------------------------------------------------ adb
 def adb_props(serial):
+    """Ask the phone about itself on a worker thread: each adb call can take
+    up to 10s on a flaky Wi-Fi link, and the main loop carries calls."""
+    threading.Thread(target=_adb_props_work, args=(serial,), daemon=True).start()
+
+
+def _adb_props_work(serial):
     model = run("adb", "-s", serial, "shell", "getprop ro.product.model") or serial
-    state["phone"]["model"] = model
-    wifi = run("adb", "-s", serial, "shell", "ip -f inet addr show wlan0")
-    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", wifi)
-    if m:
-        state["phone"]["wifiAddress"] = m.group(1)
-        mac = neighbor_mac(m.group(1))
-        remember(wifiAddress=m.group(1), model=model, **({"wifiMac": mac} if mac else {}))
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", run("adb", "-s", serial, "shell", "ip -f inet addr show wlan0"))
+    ip = m.group(1) if m else ""
+    mac = neighbor_mac(ip) if ip else ""
     battery = run("adb", "-s", serial, "shell", "dumpsys battery")
-    lvl = re.search(r"level: (\d+)", battery)
-    if lvl and state["battery"]["level"] < 0:
-        state["battery"]["level"] = int(lvl.group(1))
-        state["battery"]["charging"] = bool(re.search(r"(AC|USB) powered: true", battery))
     # Keep adbd listening on TCP so the phone stays reachable once unplugged.
     if ":" not in serial and run("adb", "-s", serial, "shell", "getprop service.adb.tcp.port") != "5555":
         run("adb", "-s", serial, "tcpip", "5555")
-    changed()
+    # Wireless debugging is the way back in after a phone reboot.
+    if run("adb", "-s", serial, "shell", "settings get global adb_wifi_enabled") != "1":
+        run("adb", "-s", serial, "shell", "settings put global adb_wifi_enabled 1")
+
+    def apply():
+        state["phone"]["model"] = model
+        if ip:
+            state["phone"]["wifiAddress"] = ip
+            remember(wifiAddress=ip, model=model, **({"wifiMac": mac} if mac else {}))
+        lvl = re.search(r"level: (\d+)", battery)
+        if lvl and state["battery"]["level"] < 0:
+            state["battery"]["level"] = int(lvl.group(1))
+            state["battery"]["charging"] = bool(re.search(r"(AC|USB) powered: true", battery))
+        changed()
+        return False
+    GLib.idle_add(apply)
 
 
 def radio_name(types: str) -> str:
@@ -284,7 +297,7 @@ def on_track(fd, cond):
         state["phone"]["transport"] = "none" if not serial else ("usb" if serial in usb else "wifi")
         if serial and serial != before:
             state["phone"]["model"] = memory.get("model", "")
-            GLib.idle_add(lambda s=serial: (adb_props(s), False)[1])
+            adb_props(serial)
             event("connected", transport=state["phone"]["transport"], model=state["phone"]["model"])
         elif not serial and before:
             event("disconnected")
@@ -316,8 +329,18 @@ def wifi_reconnect():
     # DHCP can hand the phone a new address; its MAC (per network) stays the same.
     addr = neighbor_ip(memory.get("wifiMac", ""), run("ip", "-4", "neigh")) or memory.get("wifiAddress")
     if addr and state["phone"]["transport"] == "none":
-        subprocess.Popen(["adb", "connect", f"{addr}:5555"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # 5555 dies with a phone reboot; Wireless debugging survives on trusted
+        # Wi-Fi but listens on a random port, advertised over mDNS.
+        subprocess.Popen(["sh", "-c", WIFI_CONNECT, "sh", f"{addr}:5555"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return True
+
+
+# Only the phone's own address: any device on a shared Wi-Fi can advertise
+# Wireless debugging, and phoned would take the first device it sees as "the phone".
+WIFI_CONNECT = """adb connect "$1" | grep -q '^connected' ||
+timeout 5 avahi-browse -rpt _adb-tls-connect._tcp 2>/dev/null |
+awk -F';' -v ip="${1%:*}" '$1=="=" && $3=="IPv4" && $8==ip {print $8":"$9}' | sort -u | xargs -r -n1 adb connect"""
 
 
 # ------------------------------------------------------------------ bluetooth
@@ -357,7 +380,7 @@ def bt_scan():
                 # bring adb back over Wi-Fi right away, refresh caller names.
                 event("nearby", name=new["name"])
                 wifi_reconnect()
-                GLib.timeout_add(500, lambda: (audio_now(), False)[1])
+                GLib.timeout_add(500, lambda: (audio_tick(), False)[1])
                 GLib.timeout_add_seconds(5, lambda: (pull_phonebook(new["address"]), False)[1])
             elif bt.get("connected") and not new["connected"]:
                 event("away", name=new["name"])
@@ -863,20 +886,27 @@ def headphones_first():
     new device after every music/call mode change, so without this the sound
     falls back to the laptop speaker. Runs on each new sink; a sink picked by
     hand while the buds stay connected is kept until they reconnect."""
+    while True:
+        proc = subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE, text=True)
+        for line in proc.stdout:
+            on_new_sink(line)
+        proc.wait()
+        time.sleep(5)  # PipeWire restarted (or pactl died): subscribe again
+
+
+def on_new_sink(line):
+    if "'new' on sink #" not in line:
+        return
     phone = state["bluetooth"].get("address", "").replace(":", "_")
-    proc = subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE, text=True)
-    for line in proc.stdout:
-        if "'new' on sink #" not in line:
-            continue
-        idx = line.rsplit("#", 1)[1].strip()
-        name = next((l.split("\t")[1] for l in run("pactl", "list", "short", "sinks").splitlines()
-                     if l.split("\t")[0] == idx), "")
-        if not name.startswith("bluez_output.") or (phone and phone in name):
-            continue
-        run("pactl", "set-default-sink", name)
-        mic = "bluez_input." + name[len("bluez_output."):].split(".")[0].replace("_", ":")
-        if mic in run("pactl", "list", "short", "sources"):
-            run("pactl", "set-default-source", mic)
+    idx = line.rsplit("#", 1)[1].strip()
+    name = next((l.split("\t")[1] for l in run("pactl", "list", "short", "sinks").splitlines()
+                 if l.split("\t")[0] == idx), "")
+    if not name.startswith("bluez_output.") or (phone and phone in name):
+        return
+    run("pactl", "set-default-sink", name)
+    mic = "bluez_input." + name[len("bluez_output."):].split(".")[0].replace("_", ":")
+    if mic in run("pactl", "list", "short", "sources"):
+        run("pactl", "set-default-source", mic)
 
 
 def buds_on_laptop():
@@ -995,7 +1025,11 @@ def on_player_props(iface, changed_props, invalidated):
 
 
 def audio_tick():
-    threading.Thread(target=audio_work, daemon=True).start()
+    # Routing only acts on the phone's Bluetooth link. Without it, polling the
+    # screen woke the phone over adb every 3s for nothing; the link coming up
+    # calls this at once (bt_scan), so no reading is stale.
+    if state["bluetooth"].get("connected"):
+        threading.Thread(target=audio_work, daemon=True).start()
     return True
 
 
@@ -1309,7 +1343,8 @@ def command(cmd: dict):
             "kdeconnect_" + str(cmd["name"]), bool(cmd.get("on")))
         kdec_scan()
     elif c == "photos":
-        open_photos()
+        # Mounting or pulling 60 photos takes seconds to minutes: off the main loop.
+        threading.Thread(target=photos_work, daemon=True).start()
     elif c == "share" and kd:
         kdec(f"/devices/{kd}/share", "org.kde.kdeconnect.device.share").shareUrls(
             dbus.Array([str(u) for u in cmd.get("urls", [])], signature="s"))
@@ -1353,6 +1388,15 @@ def open_photos():
             if n and not os.path.exists(os.path.join(dest, n)):
                 run("adb", "-s", serial, "pull", f"/sdcard/DCIM/Camera/{n}", dest, timeout=60)
         target = dest
+    return target
+
+
+def photos_work():
+    target = open_photos()
+    GLib.idle_add(lambda: (photos_done(target), False)[1])
+
+
+def photos_done(target):
     if target:
         state["mounted"] = target
         subprocess.Popen(["xdg-open", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -47,6 +47,34 @@ class Route(unittest.TestCase):
             phoned.state["phone"]["serial"], phoned.media_playing, phoned.apply_audio, phoned.GLib.idle_add = saved
         self.assertEqual(phoned.wanted_route(), "phone")
 
+    def test_no_bluetooth_link_means_no_screen_poll(self):
+        polls = []
+        saved = (phoned.audio_work, dict(phoned.state["bluetooth"]))
+        phoned.audio_work = lambda: polls.append(1)
+        try:
+            phoned.state["bluetooth"]["connected"] = False
+            phoned.audio_tick()
+            phoned.state["bluetooth"]["connected"] = True
+            phoned.audio_tick()
+            time.sleep(0.05)  # audio_tick polls on a thread
+        finally:
+            phoned.audio_work, phoned.state["bluetooth"] = saved
+        self.assertEqual(polls, [1])
+
+    def test_new_buds_sink_becomes_default_but_the_phone_never_does(self):
+        sinks = "5\tbluez_output.88_92_CC_44_5C_8E.1\n6\tbluez_output.48_EF_1C_4D_E8_3F.1\n"
+        calls = []
+        saved = (phoned.run, dict(phoned.state["bluetooth"]))
+        phoned.run = lambda *a, **k: calls.append(a) or (sinks if a[:3] == ("pactl", "list", "short") else "")
+        try:
+            phoned.state["bluetooth"]["address"] = "48:EF:1C:4D:E8:3F"
+            phoned.on_new_sink("Event 'new' on sink #6\n")  # the phone's own sink
+            phoned.on_new_sink("Event 'new' on sink #5\n")  # buds
+        finally:
+            phoned.run, phoned.state["bluetooth"] = saved
+        defaults = [a for a in calls if a[1] == "set-default-sink"]
+        self.assertEqual(defaults, [("pactl", "set-default-sink", "bluez_output.88_92_CC_44_5C_8E.1")])
+
     def test_call_audio_comes_here_only_for_island_calls(self):
         self.assertFalse(phoned.call_here())  # nothing: refuse
         phoned.calls["/c"] = {"state": "incoming"}

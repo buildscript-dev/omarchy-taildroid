@@ -21,6 +21,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/pixdesc.h>
 #include <libswscale/swscale.h>
 }
 
@@ -218,10 +219,14 @@ void Session::videoLoop() {
       QString("scid=%1").arg(m_scid, 8, 16, QChar('0')), "log_level=info", "audio=false", "tunnel_forward=true",
       "video_codec=" + m_opts.codec, QString("video_bit_rate=%1").arg(m_opts.bitRate),
       QString("max_fps=%1").arg(m_opts.maxFps), QString("max_size=%1").arg(m_opts.maxSize),
-      QString("stay_awake=%1").arg(m_opts.stayAwake ? "true" : "false"), QString("clipboard_autosync=%1").arg(m_opts.clipboardSync ? "true" : "false"),
+      // stay_awake only holds while the phone is plugged in; keep_active pokes
+      // user activity so it also stays awake (no dim, no lock) over Wi-Fi.
+      QString("stay_awake=%1").arg(m_opts.stayAwake ? "true" : "false"),
+      QString("keep_active=%1").arg(m_opts.stayAwake ? "true" : "false"), QString("clipboard_autosync=%1").arg(m_opts.clipboardSync ? "true" : "false"),
       "power_off_on_close=false"};
   if (!m_opts.newDisplay.isEmpty()) serverArgs << "new_display=" + m_opts.newDisplay;
   if (m_opts.flexDisplay) serverArgs << "flex_display=true";
+  if (m_opts.noDecorations) serverArgs << "vd_system_decorations=false";
 
   QByteArrayList argv8;
   for (const QString &a : s + QStringList{"shell"} + serverArgs) argv8 << a.toUtf8();
@@ -338,6 +343,32 @@ void Session::videoLoop() {
     while (avcodec_receive_frame(ctx, frame) == 0) {
       AVFrame *src = frame;
       if (frame->format == AV_PIX_FMT_VAAPI) {
+        // 8-bit streams: VA-API copies the surface straight into the Qt frame,
+        // one copy instead of surface -> sw -> Qt frame. 10-bit (or a mapping
+        // failure) falls through to the general path below.
+        QVideoFrame direct(QVideoFrameFormat(QSize(frame->width, frame->height), QVideoFrameFormat::Format_NV12));
+        if (direct.map(QVideoFrame::WriteOnly)) {
+          av_frame_unref(sw);
+          sw->format = AV_PIX_FMT_NV12;
+          sw->width = frame->width;
+          sw->height = frame->height;
+          for (int p = 0; p < 2; ++p) {
+            sw->data[p] = direct.bits(p);
+            sw->linesize[p] = direct.bytesPerLine(p);
+          }
+          // A non-owning buffer ref marks sw as allocated, so FFmpeg fills it in place.
+          sw->buf[0] = av_buffer_create(direct.bits(0), 1, [](void *, uint8_t *) {}, nullptr, 0);
+          const bool ok = sw->buf[0] && av_hwframe_transfer_data(sw, frame, 0) == 0;
+          av_frame_unref(sw);
+          direct.unmap();
+          if (ok) {
+            presentFrame(direct);
+            continue;
+          }
+        }
+        static bool warned = false;
+        if (!warned) qWarning("VA-API: direct copy unavailable (%s), using the two-copy path", av_get_pix_fmt_name(AVPixelFormat(frame->format)));
+        warned = true;
         av_frame_unref(sw);
         if (av_hwframe_transfer_data(sw, frame, 0) < 0) continue;
         src = sw;

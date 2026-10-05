@@ -21,6 +21,7 @@ import json
 import os
 import pathlib
 import re
+import select
 import shlex
 import socket
 import subprocess
@@ -135,8 +136,10 @@ def parse_ui(xml_text: str) -> tuple[str, list[dict]]:
         x1, y1, x2, y2 = map(int, m.groups())
         if x2 - x1 < 2 or y2 - y1 < 2:
             continue
-        text = (a.get("text") or "").strip()
-        desc = (a.get("content-desc") or "").strip()
+        # One line each: a message with a line break in it must not be able to draw a
+        # second, made-up "[7] Button ..." line into the list the model acts on.
+        text = " ".join((a.get("text") or "").split())
+        desc = " ".join((a.get("content-desc") or "").split())
         cls = a.get("class", "")
         flags = [f for f, key in (("click", "clickable"), ("long", "long-clickable"),
                                   ("scroll", "scrollable"), ("checked", "checked"),
@@ -165,7 +168,68 @@ def format_screen(pkg: str, els: list[dict]) -> str:
     return "\n".join(lines)
 
 
+UI_JAR = pathlib.Path(__file__).with_name("taildroid-ui.jar")  # built from uidump/TaildroidUi.java
+PHONE_UI_JAR = "/data/local/tmp/taildroid-ui.jar"
+_reader = {"proc": None, "serial": ""}
+
+
+def read_until(proc, marker: bytes, timeout: float) -> bytes | None:
+    """Read proc's stdout up to a marker line; None on timeout or exit."""
+    buf, fd, deadline = bytearray(), proc.stdout.fileno(), time.monotonic() + timeout
+    while not buf.endswith(marker + b"\n"):
+        left = deadline - time.monotonic()
+        if left <= 0 or not select.select([fd], [], [], left)[0]:
+            return None
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            return None
+        buf += chunk
+    return bytes(buf[:-len(marker) - 1])
+
+
+def stop_reader() -> None:
+    if _reader["proc"]:
+        _reader["proc"].kill()
+    _reader.update(proc=None, serial="")
+
+
+def fast_dump(timeout: float = 5.0) -> str:
+    """One dump from the phone-side reader (uidump/TaildroidUi.java): 0.05-0.2 s
+    against uiautomator's ~2.1 s. It keeps one accessibility connection open
+    and quits by itself after 60 s idle; the first call pays ~0.9 s to start."""
+    serial = _serial["id"] = _serial["id"] or pick_serial()
+    proc = _reader["proc"]
+    if proc is None or proc.poll() is not None or _reader["serial"] != serial:
+        stop_reader()
+        run(["adb", "-s", serial, "push", str(UI_JAR), PHONE_UI_JAR], timeout=15)
+        proc = subprocess.Popen(["adb", "-s", serial, "shell",
+                                 f"CLASSPATH=/system/framework/uiautomator.jar:{PHONE_UI_JAR} app_process / TaildroidUi"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        _reader.update(proc=proc, serial=serial)
+        if read_until(proc, b"<<READY>>", 8) is None:
+            stop_reader()
+            raise PhoneError("fast screen reader did not start")
+    try:
+        proc.stdin.write(b"dump\n")
+        proc.stdin.flush()
+    except OSError:
+        stop_reader()
+        raise PhoneError("fast screen reader went away")
+    out = read_until(proc, b"<<END>>", timeout)
+    if out is None:
+        stop_reader()
+        raise PhoneError("fast screen reader stalled")
+    return out.decode(errors="replace")
+
+
 def dump_ui() -> str:
+    if UI_JAR.exists():
+        try:
+            xml = fast_dump()
+            if "<hierarchy" in xml:
+                return xml
+        except PhoneError:
+            pass  # a reader that died or timed out: the stock dumper still works
     xml = shell("uiautomator", "dump", "/dev/tty", timeout=15)
     if "<hierarchy" not in xml:  # some builds refuse /dev/tty
         shell("uiautomator", "dump", "/sdcard/.taildroid-ui.xml", timeout=15)
@@ -188,11 +252,9 @@ def read_screen() -> str:
 
 
 def wait_idle(settle_s: float = 0.5) -> str:
-    """Let the tap's animation start settling, then read once. A uiautomator
-    dump itself takes 0.3-3 s on an S24 over USB, so comparing two dumps would double every step.
-    ponytail: one fixed pause; an on-phone accessibility service (as
-    android-remote-control-mcp uses) would give 10-100 ms reads and real idle
-    events if speed ever matters more."""
+    """Let the tap's animation start settling, then read once.
+    ponytail: one fixed pause; the fast reader could wait on real idle
+    events instead if taps still land on half-drawn screens."""
     time.sleep(settle_s)
     return read_screen()
 
@@ -356,7 +418,12 @@ def open_app(name: str) -> str:
         hits = [p for p in pkgs if want and want in p.lower().replace("_", "")]
         if not hits:
             raise PhoneError(f'No installed app matches "{name}". Use list_apps to see package names.')
-        pkg = min(hits, key=len)
+        # Shortest name first, but "clock" also sits inside packages that have no screen
+        # of their own (com.samsung.android.dynamiclock): take the first one that opens.
+        for pkg in sorted(hits, key=len)[:6]:
+            if "No activities found" not in shell("monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"):
+                return pkg
+        raise PhoneError(f'No app matching "{name}" has a screen to open ({", ".join(sorted(hits, key=len)[:6])}).')
     out = shell("monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1")
     if "No activities found" in out:
         raise PhoneError(f"{pkg} has no launcher screen.")
