@@ -12,6 +12,10 @@ no audio) and:
                         way for adb to put an image ON the clipboard)
   phone image, Share -> KDE Connect -> laptop clipboard (a phone image copy
                         is not readable over adb, so Share is the way in)
+  phone screenshot   -> laptop clipboard as a PNG, a second or two after the
+                        shot, so Ctrl+Shift+V pastes it at once (the phone's
+                        Screenshots folder is watched; a copy of an image
+                        cannot be read, a screenshot file can)
 """
 import hashlib
 import os
@@ -103,6 +107,64 @@ def laptop_copied():
             os.unlink(path)
 
 
+SHOTS = ("/sdcard/DCIM/Screenshots", "/sdcard/Pictures/Screenshots")
+shot = {"last": None}  # newest screenshot already handled; None until the first look
+
+
+def newest_screenshot(dev):
+    """Path of the newest screenshot on the phone, or None."""
+    best = None
+    for folder in SHOTS:
+        name = out("adb", "-s", dev, "shell", f"ls -t {folder} 2>/dev/null | head -1").strip()
+        if re.fullmatch(r"[\w .()-]+\.(png|jpe?g|webp)", name, re.I):
+            path = f"{folder}/{name}"
+            if best is None or name > best.rsplit("/", 1)[1]:
+                best = path
+    return best
+
+
+def png_of(data):
+    """The picture as PNG: terminals and Claude Code look for image/png on the clipboard."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return data
+    done = subprocess.run(["magick", "-", "png:-"], input=data, capture_output=True, timeout=30)
+    return done.stdout if done.returncode == 0 and done.stdout else None
+
+
+def screenshot_to_laptop():
+    dev = link["dev"]
+    if not dev:
+        return
+    path = newest_screenshot(dev)
+    if path is None or path == shot["last"]:
+        return
+    first = shot["last"] is None
+    shot["last"] = path
+    if first:
+        return  # what was there before we started is not a new shot
+    # The shot is written a moment after its name appears: wait until the size stops changing.
+    size = None
+    for _ in range(10):
+        now = out("adb", "-s", dev, "shell", f"stat -c %s '{path}'").strip()
+        if now and now == size:
+            break
+        size = now
+        time.sleep(0.4)
+    png = png_of(raw("adb", "-s", dev, "exec-out", f"cat '{path}'"))
+    if png:
+        seen[0] = png  # so laptop_copied does not push it back to the phone's gallery
+        subprocess.run(["wl-copy", "-t", "image/png"], input=png)
+
+
+def watch_screenshots():
+    while True:
+        try:
+            screenshot_to_laptop()
+        except Exception as e:
+            print(e, flush=True)
+        time.sleep(1.5)
+
+
 def shared_file(line):
     """Path of an image in a KDE Connect shareReceived signal line, or None."""
     m = re.search(r'string "file://(.+\.(\w+))"', line)
@@ -172,6 +234,8 @@ def demo():
     assert len(set_clipboard(b"x" * 300000)) == 14 + TEXT_MAX
     assert shared_file('   string "file:///home/u/My%20Pic.JPG"') == ("/home/u/My Pic.JPG", "image/jpeg")
     assert shared_file('   string "file:///home/u/notes.pdf"') is None
+    assert png_of(b"\x89PNG\r\n\x1a\nrest") == b"\x89PNG\r\n\x1a\nrest"
+    assert png_of(b"not an image") is None
     print("ok")
 
 
@@ -186,6 +250,7 @@ if __name__ == "__main__":
         ["dbus-monitor", "--session", "type='signal',"
          "interface='org.kde.kdeconnect.device.share',member='shareReceived'"],
         phone_shared)).start()
+    threading.Thread(target=watch_screenshots, daemon=True).start()
     while True:
         try:
             dev = serial()
