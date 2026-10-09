@@ -1,0 +1,12 @@
+#!/bin/bash
+# Ctrl+Shift+V that also pastes a picture. A terminal pastes TEXT; when the clipboard holds only an image (a phone
+# screenshot from clipsync) it pastes nothing. Then send Ctrl+V, which Claude Code answers by reading the image from
+# the clipboard. Anything else gets the original Ctrl+Shift+V back, so text paste is unchanged. DRY=1 prints the choice.
+types=$(wl-paste -l 2>/dev/null)
+class=${CLASS:-$(hyprctl activewindow -j 2>/dev/null | jq -r '.class // ""')}
+mods="CTRL SHIFT"
+if grep -q '^image/' <<<"$types" && ! grep -q '^text/' <<<"$types" && [[ $class =~ ^(foot|Alacritty|kitty|com.mitchellh.ghostty)$ ]]; then
+  mods="CTRL"
+fi
+[[ $DRY ]] && { echo "$mods V ($class)"; exit; }
+hyprctl eval "hl.dispatch(hl.dsp.send_shortcut({ mods = \"$mods\", key = \"V\", window = \"activewindow\" }))" >/dev/null
