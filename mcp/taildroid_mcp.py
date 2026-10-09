@@ -252,8 +252,12 @@ def dump_ui() -> str:
             pass  # a reader that died or timed out: the stock dumper still works
     xml = shell("uiautomator", "dump", "/dev/tty", timeout=15)
     if "<hierarchy" not in xml:  # some builds refuse /dev/tty
+        # Remove the old file first: when the dump fails, cat must not return a screen from an earlier day.
+        shell("rm", "-f", "/sdcard/.taildroid-ui.xml", timeout=15)
         shell("uiautomator", "dump", "/sdcard/.taildroid-ui.xml", timeout=15)
         xml = exec_out("cat", "/sdcard/.taildroid-ui.xml").decode(errors="replace")
+        if "<hierarchy" not in xml:
+            raise PhoneError("uiautomator dump gave no screen; try again")
     return xml
 
 
